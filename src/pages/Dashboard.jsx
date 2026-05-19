@@ -198,7 +198,7 @@ export default function Dashboard() {
       {/* NAVBAR */}
       <nav className="bg-green-700 text-white px-4 py-3 flex items-center justify-between flex-wrap gap-2">
         <div>
-          <div className="text-lg font-semibold">💰 Mon Tracker</div>
+          <div className="text-lg font-semibold">🤝 BudgetMate</div>
           <div className="text-xs opacity-75">
             {time.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})} · {time.toLocaleTimeString('fr-FR')}
           </div>

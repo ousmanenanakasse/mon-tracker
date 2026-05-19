@@ -26,8 +26,8 @@ export default function Login() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="text-4xl mb-2">💰</div>
-          <h1 className="text-2xl font-semibold text-gray-800">Mon Tracker</h1>
+          <div className="text-4xl mb-2">🤝</div>
+          <h1 className="text-2xl font-semibold text-gray-800">BudgetMate</h1>
           <p className="text-gray-500 text-sm mt-1">Gérez vos dépenses mensuelles</p>
         </div>
         <div className="flex gap-2 mb-6">
