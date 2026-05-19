@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 
 const MONTHS = ['Jan','Fév','Mars','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc']
 const MFULL = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre']
-const CATS = ['Loyer mensuel','Aidat','Eau et Gaz','Internet','Électricité','Nourriture','Transport','Autre']
+const CATS = ['Loyer mensuel','Aidat','Eau et Gaz','Internet','Électricité','Nourriture','Transport','Santé','Shopping','Loisirs','Autre']
 const CURS = [
   {code:'EUR',sym:'€',flag:'🇪🇺',label:'Euro'},
   {code:'USD',sym:'$',flag:'🇺🇸',label:'Dollar'},
@@ -28,7 +28,7 @@ export default function Dashboard() {
   const [time, setTime] = useState(new Date())
   const [showAdd, setShowAdd] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
-  const [newCat, setNewCat] = useState(CATS[0])
+  const [newCat, setNewCat] = useState('')
   const [newDesc, setNewDesc] = useState('')
   const [newAmt, setNewAmt] = useState('')
   const [newCur, setNewCur] = useState('EUR')
@@ -107,12 +107,18 @@ export default function Dashboard() {
     if (!newCat || isNaN(amt) || amt <= 0) return
     const { data: { user } } = await supabase.auth.getUser()
     await supabase.from('expenses').insert({
-      user_id: user.id, category: newCat,
-      description: newDesc, amount: amt,
-      month, year, is_recurring: false,
+      user_id: user.id,
+      category: newCat,
+      description: newDesc,
+      amount: amt,
+      month, year,
+      is_recurring: false,
       currency: newCur
     })
-    setNewDesc(''); setNewAmt(''); setShowAdd(false)
+    setNewDesc('')
+    setNewAmt('')
+    setNewCat('')
+    setShowAdd(false)
     loadExpenses()
   }
 
@@ -133,9 +139,12 @@ export default function Dashboard() {
       )
       if (!exists) {
         await supabase.from('expenses').insert({
-          user_id: user.id, category: r.category,
-          description: r.description, amount: r.amount,
-          month, year, is_recurring: true
+          user_id: user.id,
+          category: r.category,
+          description: r.description,
+          amount: r.amount,
+          month, year,
+          is_recurring: true
         })
         added++
       }
@@ -145,15 +154,17 @@ export default function Dashboard() {
   }
 
   async function addRecurring() {
-    const cat = prompt('Catégorie:')
+    const cat = prompt('Catégorie (ex: Loyer, Internet...):')
     if (!cat) return
     const desc = prompt('Description (optionnel):') || ''
     const amt = parseFloat(prompt('Montant mensuel:'))
     if (isNaN(amt) || amt <= 0) return
     const { data: { user } } = await supabase.auth.getUser()
     await supabase.from('recurring').insert({
-      user_id: user.id, category: cat,
-      description: desc, amount: amt
+      user_id: user.id,
+      category: cat,
+      description: desc,
+      amount: amt
     })
     const { data: r } = await supabase.from('recurring').select('*')
     if (r) setRecurring(r)
@@ -178,6 +189,7 @@ export default function Dashboard() {
     return acc
   }, {})
 
+  const allCats = [...new Set([...CATS, ...expenses.map(e => e.category)])]
   const n1 = name1 || 'Personne 1'
   const n2 = name2 || 'Personne 2'
 
@@ -268,15 +280,27 @@ export default function Dashboard() {
               </div>
             </div>
 
+            {/* ADD FORM */}
             {showAdd && (
               <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4 shadow-sm">
                 <h3 className="text-sm font-medium text-gray-700 mb-3">Nouvelle dépense</h3>
                 <div className="flex gap-2 flex-wrap">
-                  <select value={newCat} onChange={e=>setNewCat(e.target.value)}
-                    className="border border-gray-200 rounded-lg px-3 py-2 text-sm flex-1 min-w-32">
-                    {CATS.map(c=><option key={c} value={c}>{c}</option>)}
-                  </select>
-                  <input type="text" placeholder="Description" value={newDesc}
+                  <div className="flex-1 min-w-32">
+                    <input
+                      type="text"
+                      placeholder="Catégorie (ex: Loyer, Resto...)"
+                      value={newCat}
+                      onChange={e=>setNewCat(e.target.value)}
+                      list="cat-suggestions"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"/>
+                    <datalist id="cat-suggestions">
+                      {allCats.map(c=><option key={c} value={c}/>)}
+                    </datalist>
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Description (optionnel)"
+                    value={newDesc}
                     onChange={e=>setNewDesc(e.target.value)}
                     className="border border-gray-200 rounded-lg px-3 py-2 text-sm flex-1 min-w-32 outline-none focus:border-green-500"/>
                   <div className="flex rounded-lg border border-gray-200 overflow-hidden">
@@ -284,7 +308,10 @@ export default function Dashboard() {
                       className="bg-gray-50 border-r border-gray-200 px-2 py-2 text-sm outline-none text-gray-600">
                       {CURS.map(c=><option key={c.code} value={c.code}>{c.flag} {c.code}</option>)}
                     </select>
-                    <input type="number" placeholder="Montant" value={newAmt}
+                    <input
+                      type="number"
+                      placeholder="Montant"
+                      value={newAmt}
                       onChange={e=>setNewAmt(e.target.value)}
                       onKeyDown={e=>e.key==='Enter'&&addExpense()}
                       className="px-3 py-2 text-sm outline-none w-28"/>
@@ -301,6 +328,7 @@ export default function Dashboard() {
               </div>
             )}
 
+            {/* TABLE */}
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
               {expenses.length === 0 ? (
                 <div className="p-8 text-center text-gray-400 text-sm">
@@ -367,8 +395,9 @@ export default function Dashboard() {
         {/* BUDGET */}
         {tab === 'budget' && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-            <h2 className="text-base font-semibold text-gray-800 mb-4">🎯 Limites de budget</h2>
-            {CATS.map(cat => {
+            <h2 className="text-base font-semibold text-gray-800 mb-2">🎯 Limites de budget</h2>
+            <p className="text-xs text-gray-500 mb-5">Tapez une limite pour chaque catégorie. La barre devient rouge si vous dépassez.</p>
+            {allCats.map(cat => {
               const spent = expenses.filter(e=>e.category===cat).reduce((s,e)=>s+e.amount,0)
               const bud = budgets.find(b=>b.category===cat)
               const limit = bud?.limit_amount || 0
@@ -424,11 +453,11 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="bg-blue-50 rounded-lg p-3 mb-4 text-xs text-blue-700">
-              Ces dépenses se répètent chaque mois. Cliquez "↺ Récurrents" dans l'onglet Dépenses pour les charger automatiquement.
+              Ces dépenses se répètent chaque mois. Cliquez "↺ Récurrents" dans l'onglet Dépenses pour les charger automatiquement chaque mois.
             </div>
             {recurring.length === 0 ? (
               <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
-                Aucun récurrent. Ajoutez votre loyer, internet, etc.
+                Aucun récurrent. Ajoutez votre loyer, internet, électricité...
               </div>
             ) : (
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
@@ -465,7 +494,8 @@ export default function Dashboard() {
             <h2 className="text-base font-semibold text-gray-800 mb-4">👥 Historique des partages</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
               {[2024,2025,2026,2027].map(y => {
-                const yTotal = expenses.filter(e=>e.year===y).reduce((s,e)=>s+e.amount,0)
+                const yEntries = expenses.filter(e=>e.year===y)
+                const yTotal = yEntries.reduce((s,e)=>s+e.amount,0)
                 return yTotal > 0 ? (
                   <div key={y} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
                     <div className="text-xs text-gray-500 mb-1">Total {y}</div>
@@ -476,8 +506,38 @@ export default function Dashboard() {
                 ) : null
               })}
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 p-6 text-center text-gray-400 text-sm">
-              L'historique complet apparaîtra ici au fur et à mesure que vous ajoutez des dépenses chaque mois.
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+              <table className="w-full text-sm">
+                <thead className="bg-green-700 text-white">
+                  <tr>
+                    <th className="text-left px-4 py-3">Mois</th>
+                    <th className="text-right px-4 py-3">Total</th>
+                    <th className="text-right px-4 py-3">{n1}</th>
+                    <th className="text-right px-4 py-3">{n2}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {MONTHS.map((m,i) => {
+                    const mTotal = expenses.filter(e=>e.month===i).reduce((s,e)=>s+e.amount,0)
+                    if (mTotal === 0) return null
+                    return (
+                      <tr key={i} className={i%2===0?'bg-white':'bg-gray-50'}>
+                        <td className="px-4 py-3 font-medium text-gray-700">{MFULL[i]}</td>
+                        <td className="px-4 py-3 text-right text-gray-700">{conv(mTotal)}</td>
+                        <td className="px-4 py-3 text-right text-green-700">{conv(mTotal*share/100)}</td>
+                        <td className="px-4 py-3 text-right text-blue-600">{conv(mTotal*(100-share)/100)}</td>
+                      </tr>
+                    )
+                  })}
+                  {expenses.length === 0 && (
+                    <tr>
+                      <td colSpan="4" className="px-4 py-8 text-center text-gray-400 text-sm">
+                        L'historique apparaîtra ici au fur et à mesure.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -501,10 +561,10 @@ export default function Dashboard() {
             <div className="mb-4">
               <label className="text-xs text-gray-500 block mb-1">Partage par défaut</label>
               <div className="flex items-center gap-3">
-                <span className="text-xs text-gray-500">{name1||'P1'}</span>
+                <span className="text-xs text-gray-500">{n1}</span>
                 <input type="range" min="0" max="100" step="5" value={share}
                   onChange={e=>setShare(parseInt(e.target.value))} className="flex-1"/>
-                <span className="text-xs text-gray-500">{name2||'P2'}</span>
+                <span className="text-xs text-gray-500">{n2}</span>
                 <span className="text-xs font-medium text-gray-700">{share}%/{100-share}%</span>
               </div>
             </div>
