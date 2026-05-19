@@ -22,14 +22,16 @@ export default function Dashboard() {
   const [dispCur, setDispCur] = useState('EUR')
   const [baseCur, setBaseCur] = useState('EUR')
   const [share, setShare] = useState(50)
-  const [name1, setName1] = useState('OUSMANE')
-  const [name2, setName2] = useState('DOUCOURE')
+  const [name1, setName1] = useState('')
+  const [name2, setName2] = useState('')
   const [tab, setTab] = useState('depenses')
   const [time, setTime] = useState(new Date())
   const [showAdd, setShowAdd] = useState(false)
+  const [saveMsg, setSaveMsg] = useState('')
   const [newCat, setNewCat] = useState(CATS[0])
   const [newDesc, setNewDesc] = useState('')
   const [newAmt, setNewAmt] = useState('')
+  const [newCur, setNewCur] = useState('EUR')
 
   useEffect(() => {
     loadAll()
@@ -47,6 +49,20 @@ export default function Dashboard() {
     if (b) setBudgets(b)
     const { data: r } = await supabase.from('recurring').select('*')
     if (r) setRecurring(r)
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data: s } = await supabase
+      .from('settings')
+      .select('*')
+      .eq('user_id', user.id)
+      .single()
+    if (s) {
+      setName1(s.name1 || '')
+      setName2(s.name2 || '')
+      setShare(s.share || 50)
+      setBaseCur(s.base_cur || 'EUR')
+      setDispCur(s.base_cur || 'EUR')
+      setNewCur(s.base_cur || 'EUR')
+    }
   }
 
   async function loadExpenses() {
@@ -67,8 +83,20 @@ export default function Dashboard() {
     } catch(e) {}
   }
 
-  function conv(amount) {
-    const inEur = amount / (rates[baseCur] || 1)
+  async function saveSettings() {
+    const { data: { user } } = await supabase.auth.getUser()
+    await supabase.from('settings').upsert({
+      user_id: user.id,
+      name1, name2, share,
+      base_cur: baseCur
+    }, { onConflict: 'user_id' })
+    setSaveMsg('✅ Sauvegardé!')
+    setTimeout(() => setSaveMsg(''), 2000)
+  }
+
+  function conv(amount, from) {
+    const fromCur = from || baseCur
+    const inEur = amount / (rates[fromCur] || 1)
     const out = inEur * (rates[dispCur] || 1)
     const c = CURS.find(x => x.code === dispCur) || CURS[0]
     return c.sym + ' ' + out.toLocaleString('fr-FR', {minimumFractionDigits:2, maximumFractionDigits:2})
@@ -81,7 +109,8 @@ export default function Dashboard() {
     await supabase.from('expenses').insert({
       user_id: user.id, category: newCat,
       description: newDesc, amount: amt,
-      month, year, is_recurring: false
+      month, year, is_recurring: false,
+      currency: newCur
     })
     setNewDesc(''); setNewAmt(''); setShowAdd(false)
     loadExpenses()
@@ -115,6 +144,27 @@ export default function Dashboard() {
     else loadExpenses()
   }
 
+  async function addRecurring() {
+    const cat = prompt('Catégorie:')
+    if (!cat) return
+    const desc = prompt('Description (optionnel):') || ''
+    const amt = parseFloat(prompt('Montant mensuel:'))
+    if (isNaN(amt) || amt <= 0) return
+    const { data: { user } } = await supabase.auth.getUser()
+    await supabase.from('recurring').insert({
+      user_id: user.id, category: cat,
+      description: desc, amount: amt
+    })
+    const { data: r } = await supabase.from('recurring').select('*')
+    if (r) setRecurring(r)
+  }
+
+  async function deleteRecurring(id) {
+    await supabase.from('recurring').delete().eq('id', id)
+    const { data: r } = await supabase.from('recurring').select('*')
+    if (r) setRecurring(r)
+  }
+
   async function logout() {
     await supabase.auth.signOut()
   }
@@ -128,15 +178,20 @@ export default function Dashboard() {
     return acc
   }, {})
 
+  const n1 = name1 || 'Personne 1'
+  const n2 = name2 || 'Personne 2'
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* NAVBAR */}
       <nav className="bg-green-700 text-white px-4 py-3 flex items-center justify-between flex-wrap gap-2">
         <div>
           <div className="text-lg font-semibold">💰 Mon Tracker</div>
-          <div className="text-xs opacity-75">{time.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})} · {time.toLocaleTimeString('fr-FR')}</div>
+          <div className="text-xs opacity-75">
+            {time.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})} · {time.toLocaleTimeString('fr-FR')}
+          </div>
         </div>
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="flex gap-1">
             {CURS.map(c => (
               <button key={c.code} onClick={() => setDispCur(c.code)}
@@ -145,20 +200,21 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
-          <button onClick={logout} className="bg-green-800 hover:bg-green-900 px-3 py-1 rounded text-xs">
+          <button onClick={logout}
+            className="bg-green-800 hover:bg-green-900 px-3 py-1 rounded text-xs">
             Déconnexion
           </button>
         </div>
       </nav>
 
       <div className="max-w-5xl mx-auto p-4">
-        {/* SUMMARY CARDS */}
+        {/* SUMMARY */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           {[
             {label:`Total ${MONTHS[month]}`,val:conv(total),color:'text-gray-800'},
-            {label:`${name1} (${share}%)`,val:conv(s1),color:'text-green-700'},
-            {label:`${name2} (${100-share}%)`,val:conv(s2),color:'text-blue-600'},
-            {label:'Dépenses',val:expenses.length+' entrées',color:'text-gray-600'},
+            {label:`${n1} (${share}%)`,val:conv(s1),color:'text-green-700'},
+            {label:`${n2} (${100-share}%)`,val:conv(s2),color:'text-blue-600'},
+            {label:'Entrées',val:expenses.length+' dépenses',color:'text-gray-600'},
           ].map((c,i) => (
             <div key={i} className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
               <div className="text-xs text-gray-500 mb-1">{c.label}</div>
@@ -172,6 +228,7 @@ export default function Dashboard() {
           {[
             {id:'depenses',label:'📋 Dépenses'},
             {id:'budget',label:'🎯 Budget'},
+            {id:'recurrents',label:'↺ Récurrents'},
             {id:'historique',label:'👥 Historique'},
             {id:'reglages',label:'⚙️ Réglages'},
           ].map(t => (
@@ -182,7 +239,7 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* TAB: DEPENSES */}
+        {/* DEPENSES */}
         {tab === 'depenses' && (
           <div>
             <div className="flex gap-2 mb-4 flex-wrap items-center">
@@ -202,16 +259,15 @@ export default function Dashboard() {
                 className="bg-white border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-50">
                 ↺ Récurrents
               </button>
-              <div className="flex items-center gap-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg px-3 py-2">
-                <span className="text-xs">{name1}</span>
+              <div className="flex items-center gap-2 text-sm bg-white border border-gray-200 rounded-lg px-3 py-2">
+                <span className="text-xs text-gray-500">{n1}</span>
                 <input type="range" min="0" max="100" step="5" value={share}
                   onChange={e=>setShare(parseInt(e.target.value))} className="w-20"/>
-                <span className="text-xs">{name2}</span>
+                <span className="text-xs text-gray-500">{n2}</span>
                 <span className="text-xs text-gray-400">{share}%/{100-share}%</span>
               </div>
             </div>
 
-            {/* ADD FORM */}
             {showAdd && (
               <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4 shadow-sm">
                 <h3 className="text-sm font-medium text-gray-700 mb-3">Nouvelle dépense</h3>
@@ -223,10 +279,16 @@ export default function Dashboard() {
                   <input type="text" placeholder="Description" value={newDesc}
                     onChange={e=>setNewDesc(e.target.value)}
                     className="border border-gray-200 rounded-lg px-3 py-2 text-sm flex-1 min-w-32 outline-none focus:border-green-500"/>
-                  <input type="number" placeholder={`Montant (${baseCur})`} value={newAmt}
-                    onChange={e=>setNewAmt(e.target.value)}
-                    onKeyDown={e=>e.key==='Enter'&&addExpense()}
-                    className="border border-gray-200 rounded-lg px-3 py-2 text-sm w-36 outline-none focus:border-green-500"/>
+                  <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                    <select value={newCur} onChange={e=>setNewCur(e.target.value)}
+                      className="bg-gray-50 border-r border-gray-200 px-2 py-2 text-sm outline-none text-gray-600">
+                      {CURS.map(c=><option key={c.code} value={c.code}>{c.flag} {c.code}</option>)}
+                    </select>
+                    <input type="number" placeholder="Montant" value={newAmt}
+                      onChange={e=>setNewAmt(e.target.value)}
+                      onKeyDown={e=>e.key==='Enter'&&addExpense()}
+                      className="px-3 py-2 text-sm outline-none w-28"/>
+                  </div>
                   <button onClick={addExpense}
                     className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-800">
                     Ajouter
@@ -239,7 +301,6 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* EXPENSES TABLE */}
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
               {expenses.length === 0 ? (
                 <div className="p-8 text-center text-gray-400 text-sm">
@@ -252,8 +313,8 @@ export default function Dashboard() {
                       <tr>
                         <th className="text-left px-4 py-3">Description</th>
                         <th className="text-right px-4 py-3">Montant</th>
-                        <th className="text-right px-4 py-3">{name1}</th>
-                        <th className="text-right px-4 py-3">{name2}</th>
+                        <th className="text-right px-4 py-3">{n1}</th>
+                        <th className="text-right px-4 py-3">{n2}</th>
                         <th className="px-4 py-3"></th>
                       </tr>
                     </thead>
@@ -271,9 +332,9 @@ export default function Dashboard() {
                                 {e.description || cat}
                                 {e.is_recurring && <span className="ml-2 text-xs bg-green-100 text-green-700 px-1 rounded">↺</span>}
                               </td>
-                              <td className="px-4 py-2 text-right text-gray-700">{conv(e.amount)}</td>
-                              <td className="px-4 py-2 text-right text-green-700">{conv(e.amount*share/100)}</td>
-                              <td className="px-4 py-2 text-right text-blue-600">{conv(e.amount*(100-share)/100)}</td>
+                              <td className="px-4 py-2 text-right text-gray-700">{conv(e.amount, e.currency)}</td>
+                              <td className="px-4 py-2 text-right text-green-700">{conv(e.amount*share/100, e.currency)}</td>
+                              <td className="px-4 py-2 text-right text-blue-600">{conv(e.amount*(100-share)/100, e.currency)}</td>
                               <td className="px-4 py-2 text-right">
                                 <button onClick={()=>deleteExpense(e.id)} className="text-red-400 hover:text-red-600 text-lg">×</button>
                               </td>
@@ -303,11 +364,10 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* TAB: BUDGET */}
+        {/* BUDGET */}
         {tab === 'budget' && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-            <h2 className="text-base font-semibold text-gray-800 mb-4">🎯 Limites de budget par catégorie</h2>
-            <p className="text-sm text-gray-500 mb-4">Définissez un plafond pour chaque catégorie. La barre devient rouge si vous dépassez.</p>
+            <h2 className="text-base font-semibold text-gray-800 mb-4">🎯 Limites de budget</h2>
             {CATS.map(cat => {
               const spent = expenses.filter(e=>e.category===cat).reduce((s,e)=>s+e.amount,0)
               const bud = budgets.find(b=>b.category===cat)
@@ -315,14 +375,16 @@ export default function Dashboard() {
               const pct = limit ? Math.min(spent/limit*100,100) : 0
               const color = pct >= 100 ? 'bg-red-500' : pct >= 75 ? 'bg-orange-400' : 'bg-green-500'
               return (
-                <div key={cat} className="mb-4">
+                <div key={cat} className="mb-5">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-sm font-medium text-gray-700">{cat}</span>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-500">{conv(spent)} / </span>
+                      <span className="text-xs text-gray-500">{conv(spent)}</span>
+                      <span className="text-xs text-gray-400">/</span>
                       <input type="number" placeholder="Limite" defaultValue={limit||''}
                         onBlur={async e => {
                           const val = parseFloat(e.target.value)
+                          if (isNaN(val)) return
                           const { data:{user} } = await supabase.auth.getUser()
                           if (bud) {
                             await supabase.from('budgets').update({limit_amount:val}).eq('id',bud.id)
@@ -336,68 +398,128 @@ export default function Dashboard() {
                     </div>
                   </div>
                   {limit > 0 && (
-                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full transition-all ${color}`} style={{width:`${pct}%`}}></div>
-                    </div>
+                    <>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full transition-all ${color}`} style={{width:`${pct}%`}}></div>
+                      </div>
+                      <p className={`text-xs mt-1 ${pct>=100?'text-red-500':'text-gray-400'}`}>
+                        {Math.round(pct)}% utilisé {pct>=100?'⚠️ Dépassé!':pct>=75?'· Attention':''}
+                      </p>
+                    </>
                   )}
-                  {pct >= 100 && <p className="text-xs text-red-500 mt-1">⚠️ Budget dépassé!</p>}
                 </div>
               )
             })}
           </div>
         )}
 
-        {/* TAB: HISTORIQUE */}
-        {tab === 'historique' && (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
-            <div className="p-4 border-b border-gray-100">
-              <h2 className="text-base font-semibold text-gray-800">👥 Historique des partages</h2>
-              <p className="text-sm text-gray-500 mt-1">Cumul de toutes les périodes enregistrées</p>
+        {/* RECURRENTS */}
+        {tab === 'recurrents' && (
+          <div>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-base font-semibold text-gray-800">↺ Dépenses récurrentes</h2>
+              <button onClick={addRecurring}
+                className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-800">
+                + Ajouter récurrent
+              </button>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-green-700 text-white">
-                  <tr>
-                    <th className="text-left px-4 py-3">Mois</th>
-                    <th className="text-right px-4 py-3">Total</th>
-                    <th className="text-right px-4 py-3">{name1}</th>
-                    <th className="text-right px-4 py-3">{name2}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td colSpan="4" className="px-4 py-8 text-center text-gray-400 text-sm">
-                      Les données de tous les mois apparaîtront ici au fur et à mesure.
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+            <div className="bg-blue-50 rounded-lg p-3 mb-4 text-xs text-blue-700">
+              Ces dépenses se répètent chaque mois. Cliquez "↺ Récurrents" dans l'onglet Dépenses pour les charger automatiquement.
+            </div>
+            {recurring.length === 0 ? (
+              <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
+                Aucun récurrent. Ajoutez votre loyer, internet, etc.
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+                <table className="w-full text-sm">
+                  <thead className="bg-green-700 text-white">
+                    <tr>
+                      <th className="text-left px-4 py-3">Catégorie</th>
+                      <th className="text-left px-4 py-3">Description</th>
+                      <th className="text-right px-4 py-3">Montant/mois</th>
+                      <th className="px-4 py-3"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recurring.map((r,i) => (
+                      <tr key={r.id} className={i%2===0?'bg-white':'bg-gray-50'}>
+                        <td className="px-4 py-3 font-medium text-gray-700">{r.category}</td>
+                        <td className="px-4 py-3 text-gray-500">{r.description||'—'}</td>
+                        <td className="px-4 py-3 text-right text-green-700">{conv(r.amount)}</td>
+                        <td className="px-4 py-3 text-right">
+                          <button onClick={()=>deleteRecurring(r.id)} className="text-red-400 hover:text-red-600 text-lg">×</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* HISTORIQUE */}
+        {tab === 'historique' && (
+          <div>
+            <h2 className="text-base font-semibold text-gray-800 mb-4">👥 Historique des partages</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+              {[2024,2025,2026,2027].map(y => {
+                const yTotal = expenses.filter(e=>e.year===y).reduce((s,e)=>s+e.amount,0)
+                return yTotal > 0 ? (
+                  <div key={y} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                    <div className="text-xs text-gray-500 mb-1">Total {y}</div>
+                    <div className="text-base font-semibold text-gray-800">{conv(yTotal)}</div>
+                    <div className="text-xs text-green-700 mt-1">{n1}: {conv(yTotal*share/100)}</div>
+                    <div className="text-xs text-blue-600">{n2}: {conv(yTotal*(100-share)/100)}</div>
+                  </div>
+                ) : null
+              })}
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-6 text-center text-gray-400 text-sm">
+              L'historique complet apparaîtra ici au fur et à mesure que vous ajoutez des dépenses chaque mois.
             </div>
           </div>
         )}
 
-        {/* TAB: REGLAGES */}
+        {/* REGLAGES */}
         {tab === 'reglages' && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm max-w-md">
-            <h2 className="text-base font-semibold text-gray-800 mb-4">⚙️ Réglages</h2>
-            {[
-              {label:'Nom personne 1',val:name1,set:setName1},
-              {label:'Nom personne 2',val:name2,set:setName2},
-            ].map(f => (
-              <div key={f.label} className="mb-4">
-                <label className="text-xs text-gray-500 block mb-1">{f.label}</label>
-                <input type="text" value={f.val} onChange={e=>f.set(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"/>
-              </div>
-            ))}
+            <h2 className="text-base font-semibold text-gray-800 mb-5">⚙️ Réglages</h2>
             <div className="mb-4">
+              <label className="text-xs text-gray-500 block mb-1">Nom personne 1</label>
+              <input type="text" value={name1} onChange={e=>setName1(e.target.value)}
+                placeholder="Ex: Ousmane"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"/>
+            </div>
+            <div className="mb-4">
+              <label className="text-xs text-gray-500 block mb-1">Nom personne 2</label>
+              <input type="text" value={name2} onChange={e=>setName2(e.target.value)}
+                placeholder="Ex: Doucoure"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"/>
+            </div>
+            <div className="mb-4">
+              <label className="text-xs text-gray-500 block mb-1">Partage par défaut</label>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-gray-500">{name1||'P1'}</span>
+                <input type="range" min="0" max="100" step="5" value={share}
+                  onChange={e=>setShare(parseInt(e.target.value))} className="flex-1"/>
+                <span className="text-xs text-gray-500">{name2||'P2'}</span>
+                <span className="text-xs font-medium text-gray-700">{share}%/{100-share}%</span>
+              </div>
+            </div>
+            <div className="mb-5">
               <label className="text-xs text-gray-500 block mb-1">Devise de base</label>
               <select value={baseCur} onChange={e=>setBaseCur(e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                {CURS.map(c=><option key={c.code} value={c.code}>{c.flag} {c.label}</option>)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500">
+                {CURS.map(c=><option key={c.code} value={c.code}>{c.flag} {c.label} ({c.sym})</option>)}
               </select>
             </div>
-            <p className="text-xs text-green-600 font-medium">✓ Les réglages sont sauvegardés automatiquement</p>
+            <button onClick={saveSettings}
+              className="w-full bg-green-700 text-white rounded-lg py-2 text-sm font-medium hover:bg-green-800">
+              💾 Sauvegarder les réglages
+            </button>
+            {saveMsg && <p className="text-xs text-green-600 mt-2 text-center">{saveMsg}</p>}
           </div>
         )}
       </div>
