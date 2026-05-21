@@ -32,6 +32,9 @@ export default function Dashboard() {
   const [newDesc, setNewDesc] = useState('')
   const [newAmt, setNewAmt] = useState('')
   const [newCur, setNewCur] = useState('EUR')
+  const [editId, setEditId] = useState(null)
+  const [editDesc, setEditDesc] = useState('')
+  const [editAmt, setEditAmt] = useState('')
 
   useEffect(() => {
     loadAll()
@@ -128,6 +131,23 @@ export default function Dashboard() {
     loadExpenses()
   }
 
+  function startEdit(e) {
+    setEditId(e.id)
+    setEditDesc(e.description || '')
+    setEditAmt(e.amount.toString())
+  }
+
+  async function saveEdit(id) {
+    const amt = parseFloat(editAmt)
+    if (isNaN(amt) || amt <= 0) return
+    await supabase.from('expenses').update({
+      description: editDesc,
+      amount: amt
+    }).eq('id', id)
+    setEditId(null)
+    loadExpenses()
+  }
+
   async function applyRecurring() {
     const { data: { user } } = await supabase.auth.getUser()
     let added = 0
@@ -144,7 +164,8 @@ export default function Dashboard() {
           description: r.description,
           amount: r.amount,
           month, year,
-          is_recurring: true
+          is_recurring: true,
+          currency: baseCur
         })
         added++
       }
@@ -188,7 +209,6 @@ export default function Dashboard() {
     acc[e.category].push(e)
     return acc
   }, {})
-
   const allCats = [...new Set([...CATS, ...expenses.map(e => e.category)])]
   const n1 = name1 || 'Personne 1'
   const n2 = name2 || 'Personne 2'
@@ -357,14 +377,47 @@ export default function Dashboard() {
                           {rows.map((e,i) => (
                             <tr key={e.id} className={i%2===0?'bg-white':'bg-gray-50'}>
                               <td className="px-4 py-2 text-gray-700">
-                                {e.description || cat}
-                                {e.is_recurring && <span className="ml-2 text-xs bg-green-100 text-green-700 px-1 rounded">↺</span>}
+                                {editId===e.id ? (
+                                  <input type="text" value={editDesc}
+                                    onChange={ev=>setEditDesc(ev.target.value)}
+                                    className="border border-gray-200 rounded px-2 py-1 text-sm outline-none focus:border-green-500 w-full"/>
+                                ) : (
+                                  <>
+                                    {e.description || cat}
+                                    {e.is_recurring && <span className="ml-2 text-xs bg-green-100 text-green-700 px-1 rounded">↺</span>}
+                                  </>
+                                )}
                               </td>
-                              <td className="px-4 py-2 text-right text-gray-700">{conv(e.amount, e.currency)}</td>
-                              <td className="px-4 py-2 text-right text-green-700">{conv(e.amount*share/100, e.currency)}</td>
-                              <td className="px-4 py-2 text-right text-blue-600">{conv(e.amount*(100-share)/100, e.currency)}</td>
+                              <td className="px-4 py-2 text-right text-gray-700">
+                                {editId===e.id ? (
+                                  <input type="number" value={editAmt}
+                                    onChange={ev=>setEditAmt(ev.target.value)}
+                                    onKeyDown={ev=>ev.key==='Enter'&&saveEdit(e.id)}
+                                    className="border border-gray-200 rounded px-2 py-1 text-sm outline-none focus:border-green-500 w-28 text-right"/>
+                                ) : conv(e.amount, e.currency)}
+                              </td>
+                              <td className="px-4 py-2 text-right text-green-700">
+                                {editId===e.id?'—':conv(e.amount*share/100, e.currency)}
+                              </td>
+                              <td className="px-4 py-2 text-right text-blue-600">
+                                {editId===e.id?'—':conv(e.amount*(100-share)/100, e.currency)}
+                              </td>
                               <td className="px-4 py-2 text-right">
-                                <button onClick={()=>deleteExpense(e.id)} className="text-red-400 hover:text-red-600 text-lg">×</button>
+                                {editId===e.id ? (
+                                  <div className="flex gap-1 justify-end">
+                                    <button onClick={()=>saveEdit(e.id)}
+                                      className="text-xs bg-green-700 text-white px-2 py-1 rounded hover:bg-green-800">✓</button>
+                                    <button onClick={()=>setEditId(null)}
+                                      className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded hover:bg-gray-300">✗</button>
+                                  </div>
+                                ) : (
+                                  <div className="flex gap-1 justify-end">
+                                    <button onClick={()=>startEdit(e)}
+                                      className="text-gray-400 hover:text-green-600 px-1">✏️</button>
+                                    <button onClick={()=>deleteExpense(e.id)}
+                                      className="text-red-400 hover:text-red-600 text-lg">×</button>
+                                  </div>
+                                )}
                               </td>
                             </tr>
                           ))}
@@ -453,7 +506,7 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="bg-blue-50 rounded-lg p-3 mb-4 text-xs text-blue-700">
-              Ces dépenses se répètent chaque mois. Cliquez "↺ Récurrents" dans l'onglet Dépenses pour les charger automatiquement chaque mois.
+              Ces dépenses se répètent chaque mois. Cliquez "↺ Récurrents" dans l'onglet Dépenses pour les charger automatiquement.
             </div>
             {recurring.length === 0 ? (
               <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
@@ -492,20 +545,6 @@ export default function Dashboard() {
         {tab === 'historique' && (
           <div>
             <h2 className="text-base font-semibold text-gray-800 mb-4">👥 Historique des partages</h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-              {[2024,2025,2026,2027].map(y => {
-                const yEntries = expenses.filter(e=>e.year===y)
-                const yTotal = yEntries.reduce((s,e)=>s+e.amount,0)
-                return yTotal > 0 ? (
-                  <div key={y} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-                    <div className="text-xs text-gray-500 mb-1">Total {y}</div>
-                    <div className="text-base font-semibold text-gray-800">{conv(yTotal)}</div>
-                    <div className="text-xs text-green-700 mt-1">{n1}: {conv(yTotal*share/100)}</div>
-                    <div className="text-xs text-blue-600">{n2}: {conv(yTotal*(100-share)/100)}</div>
-                  </div>
-                ) : null
-              })}
-            </div>
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
               <table className="w-full text-sm">
                 <thead className="bg-green-700 text-white">
@@ -518,11 +557,12 @@ export default function Dashboard() {
                 </thead>
                 <tbody>
                   {MONTHS.map((m,i) => {
-                    const mTotal = expenses.filter(e=>e.month===i).reduce((s,e)=>s+e.amount,0)
+                    const mEntries = expenses.filter(e=>e.month===i)
+                    const mTotal = mEntries.reduce((s,e)=>s+e.amount,0)
                     if (mTotal === 0) return null
                     return (
                       <tr key={i} className={i%2===0?'bg-white':'bg-gray-50'}>
-                        <td className="px-4 py-3 font-medium text-gray-700">{MFULL[i]}</td>
+                        <td className="px-4 py-3 font-medium text-gray-700">{MFULL[i]} {year}</td>
                         <td className="px-4 py-3 text-right text-gray-700">{conv(mTotal)}</td>
                         <td className="px-4 py-3 text-right text-green-700">{conv(mTotal*share/100)}</td>
                         <td className="px-4 py-3 text-right text-blue-600">{conv(mTotal*(100-share)/100)}</td>
