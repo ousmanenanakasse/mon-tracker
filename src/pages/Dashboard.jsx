@@ -288,7 +288,7 @@ export default function Dashboard() {
               </select>
               <select value={year} onChange={e=>setYear(parseInt(e.target.value))}
                 className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
-                {[2024,2025,2026,2027].map(y=><option key={y} value={y}>{y}</option>)}
+                {Array.from({length:11}, (_,i) => 2024+i).map(y=><option key={y} value={y}>{y}</option>)}
               </select>
               <button onClick={() => setShowAdd(!showAdd)}
                 className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800">
