@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts'
 
 const MONTHS = ['Jan','Fév','Mars','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc']
 const MFULL = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre']
@@ -10,6 +11,7 @@ const CURS = [
   {code:'TRY',sym:'₺',flag:'🇹🇷',label:'Livre turque'},
   {code:'XOF',sym:'Fr',flag:'🌍',label:'Franc CFA'},
 ]
+const COLORS = ['#1a6b3c','#2196f3','#ff9800','#9c27b0','#e53935','#00bcd4','#8bc34a','#ff5722','#795548','#607d8b','#f06292']
 
 export default function Dashboard() {
   const now = new Date()
@@ -105,6 +107,12 @@ export default function Dashboard() {
     return c.sym + ' ' + out.toLocaleString('fr-FR', {minimumFractionDigits:2, maximumFractionDigits:2})
   }
 
+  function convRaw(amount, from) {
+    const fromCur = from || baseCur
+    const inEur = amount / (rates[fromCur] || 1)
+    return inEur * (rates[dispCur] || 1)
+  }
+
   async function addExpense() {
     const amt = parseFloat(newAmt)
     if (!newCat || isNaN(amt) || amt <= 0) return
@@ -118,10 +126,7 @@ export default function Dashboard() {
       is_recurring: false,
       currency: newCur
     })
-    setNewDesc('')
-    setNewAmt('')
-    setNewCat('')
-    setShowAdd(false)
+    setNewDesc(''); setNewAmt(''); setNewCat(''); setShowAdd(false)
     loadExpenses()
   }
 
@@ -153,19 +158,13 @@ export default function Dashboard() {
     let added = 0
     for (const r of recurring) {
       const exists = expenses.find(e =>
-        e.category === r.category &&
-        e.description === r.description &&
-        e.is_recurring
+        e.category === r.category && e.description === r.description && e.is_recurring
       )
       if (!exists) {
         await supabase.from('expenses').insert({
-          user_id: user.id,
-          category: r.category,
-          description: r.description,
-          amount: r.amount,
-          month, year,
-          is_recurring: true,
-          currency: baseCur
+          user_id: user.id, category: r.category,
+          description: r.description, amount: r.amount,
+          month, year, is_recurring: true, currency: baseCur
         })
         added++
       }
@@ -175,18 +174,13 @@ export default function Dashboard() {
   }
 
   async function addRecurring() {
-    const cat = prompt('Catégorie (ex: Loyer, Internet...):')
+    const cat = prompt('Catégorie:')
     if (!cat) return
     const desc = prompt('Description (optionnel):') || ''
     const amt = parseFloat(prompt('Montant mensuel:'))
     if (isNaN(amt) || amt <= 0) return
     const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('recurring').insert({
-      user_id: user.id,
-      category: cat,
-      description: desc,
-      amount: amt
-    })
+    await supabase.from('recurring').insert({ user_id: user.id, category: cat, description: desc, amount: amt })
     const { data: r } = await supabase.from('recurring').select('*')
     if (r) setRecurring(r)
   }
@@ -197,9 +191,7 @@ export default function Dashboard() {
     if (r) setRecurring(r)
   }
 
-  async function logout() {
-    await supabase.auth.signOut()
-  }
+  async function logout() { await supabase.auth.signOut() }
 
   const total = expenses.reduce((s, e) => s + (e.amount || 0), 0)
   const s1 = total * share / 100
@@ -212,6 +204,21 @@ export default function Dashboard() {
   const allCats = [...new Set([...CATS, ...expenses.map(e => e.category)])]
   const n1 = name1 || 'Personne 1'
   const n2 = name2 || 'Personne 2'
+
+  // Chart data
+  const pieData = Object.entries(byCat).map(([cat, rows]) => ({
+    name: cat,
+    value: parseFloat(convRaw(rows.reduce((s,e)=>s+e.amount,0)).toFixed(2))
+  }))
+
+  const barData = MONTHS.map((m, i) => ({
+    name: m,
+    total: parseFloat(convRaw(
+      expenses.filter(e=>e.month===i).reduce((s,e)=>s+e.amount,0)
+    ).toFixed(2))
+  })).filter(d => d.total > 0)
+
+  const curSym = (CURS.find(x=>x.code===dispCur)||CURS[0]).sym
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -232,8 +239,7 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
-          <button onClick={logout}
-            className="bg-green-800 hover:bg-green-900 px-3 py-1 rounded text-xs">
+          <button onClick={logout} className="bg-green-800 hover:bg-green-900 px-3 py-1 rounded text-xs">
             Déconnexion
           </button>
         </div>
@@ -259,6 +265,7 @@ export default function Dashboard() {
         <div className="flex gap-2 mb-4 flex-wrap">
           {[
             {id:'depenses',label:'📋 Dépenses'},
+            {id:'graphiques',label:'📊 Graphiques'},
             {id:'budget',label:'🎯 Budget'},
             {id:'recurrents',label:'↺ Récurrents'},
             {id:'historique',label:'👥 Historique'},
@@ -300,27 +307,20 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* ADD FORM */}
             {showAdd && (
               <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4 shadow-sm">
                 <h3 className="text-sm font-medium text-gray-700 mb-3">Nouvelle dépense</h3>
                 <div className="flex gap-2 flex-wrap">
                   <div className="flex-1 min-w-32">
-                    <input
-                      type="text"
-                      placeholder="Catégorie (ex: Loyer, Resto...)"
-                      value={newCat}
-                      onChange={e=>setNewCat(e.target.value)}
+                    <input type="text" placeholder="Catégorie (ex: Loyer, Resto...)"
+                      value={newCat} onChange={e=>setNewCat(e.target.value)}
                       list="cat-suggestions"
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500"/>
                     <datalist id="cat-suggestions">
                       {allCats.map(c=><option key={c} value={c}/>)}
                     </datalist>
                   </div>
-                  <input
-                    type="text"
-                    placeholder="Description (optionnel)"
-                    value={newDesc}
+                  <input type="text" placeholder="Description (optionnel)" value={newDesc}
                     onChange={e=>setNewDesc(e.target.value)}
                     className="border border-gray-200 rounded-lg px-3 py-2 text-sm flex-1 min-w-32 outline-none focus:border-green-500"/>
                   <div className="flex rounded-lg border border-gray-200 overflow-hidden">
@@ -328,10 +328,7 @@ export default function Dashboard() {
                       className="bg-gray-50 border-r border-gray-200 px-2 py-2 text-sm outline-none text-gray-600">
                       {CURS.map(c=><option key={c.code} value={c.code}>{c.flag} {c.code}</option>)}
                     </select>
-                    <input
-                      type="number"
-                      placeholder="Montant"
-                      value={newAmt}
+                    <input type="number" placeholder="Montant" value={newAmt}
                       onChange={e=>setNewAmt(e.target.value)}
                       onKeyDown={e=>e.key==='Enter'&&addExpense()}
                       className="px-3 py-2 text-sm outline-none w-28"/>
@@ -348,7 +345,6 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* TABLE */}
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
               {expenses.length === 0 ? (
                 <div className="p-8 text-center text-gray-400 text-sm">
@@ -445,11 +441,104 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* GRAPHIQUES */}
+        {tab === 'graphiques' && (
+          <div className="space-y-6">
+            {expenses.length === 0 ? (
+              <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
+                Ajoutez des dépenses pour voir les graphiques !
+              </div>
+            ) : (
+              <>
+                {/* PIE CHART */}
+                <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                  <h2 className="text-base font-semibold text-gray-800 mb-1">🥧 Répartition par catégorie</h2>
+                  <p className="text-xs text-gray-500 mb-4">{MFULL[month]} {year}</p>
+                  <div className="flex flex-col md:flex-row items-center gap-6">
+                    <ResponsiveContainer width="100%" height={280}>
+                      <PieChart>
+                        <Pie data={pieData} cx="50%" cy="50%"
+                          outerRadius={110} dataKey="value"
+                          label={({name, percent}) => `${name} ${(percent*100).toFixed(0)}%`}
+                          labelLine={true}>
+                          {pieData.map((_, i) => (
+                            <Cell key={i} fill={COLORS[i % COLORS.length]}/>
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(val) => `${curSym} ${val.toLocaleString('fr-FR')}`}/>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="flex flex-col gap-2 min-w-48">
+                      {pieData.map((d,i) => (
+                        <div key={d.name} className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full flex-shrink-0" style={{background:COLORS[i%COLORS.length]}}></div>
+                          <span className="text-xs text-gray-600 flex-1">{d.name}</span>
+                          <span className="text-xs font-medium text-gray-800">{curSym} {d.value.toLocaleString('fr-FR')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* BAR CHART - split */}
+                <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                  <h2 className="text-base font-semibold text-gray-800 mb-1">📊 Dépenses par catégorie</h2>
+                  <p className="text-xs text-gray-500 mb-4">Comparaison des montants — {MFULL[month]} {year}</p>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={pieData} margin={{top:5,right:20,left:10,bottom:60}}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
+                      <XAxis dataKey="name" tick={{fontSize:11}} angle={-35} textAnchor="end"/>
+                      <YAxis tick={{fontSize:11}} tickFormatter={v=>`${curSym}${v.toLocaleString('fr-FR')}`}/>
+                      <Tooltip formatter={(val)=>[`${curSym} ${val.toLocaleString('fr-FR')}`, 'Montant']}/>
+                      <Bar dataKey="value" radius={[4,4,0,0]}>
+                        {pieData.map((_,i) => (
+                          <Cell key={i} fill={COLORS[i%COLORS.length]}/>
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* SPLIT BAR */}
+                <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                  <h2 className="text-base font-semibold text-gray-800 mb-1">👥 Partage {n1} vs {n2}</h2>
+                  <p className="text-xs text-gray-500 mb-4">{share}% / {100-share}% — {MFULL[month]} {year}</p>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={[
+                      {name:n1, montant: parseFloat(convRaw(s1).toFixed(2)), fill:'#1a6b3c'},
+                      {name:n2, montant: parseFloat(convRaw(s2).toFixed(2)), fill:'#2196f3'},
+                    ]} margin={{top:5,right:20,left:10,bottom:5}}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0"/>
+                      <XAxis dataKey="name" tick={{fontSize:13, fontWeight:500}}/>
+                      <YAxis tick={{fontSize:11}} tickFormatter={v=>`${curSym}${v.toLocaleString('fr-FR')}`}/>
+                      <Tooltip formatter={(val)=>[`${curSym} ${val.toLocaleString('fr-FR')}`, 'Montant']}/>
+                      <Bar dataKey="montant" radius={[6,6,0,0]}>
+                        <Cell fill="#1a6b3c"/>
+                        <Cell fill="#2196f3"/>
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div className="flex justify-around mt-3">
+                    <div className="text-center">
+                      <div className="text-xs text-gray-500">{n1}</div>
+                      <div className="text-base font-semibold text-green-700">{conv(s1)}</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xs text-gray-500">{n2}</div>
+                      <div className="text-base font-semibold text-blue-600">{conv(s2)}</div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* BUDGET */}
         {tab === 'budget' && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
             <h2 className="text-base font-semibold text-gray-800 mb-2">🎯 Limites de budget</h2>
-            <p className="text-xs text-gray-500 mb-5">Tapez une limite pour chaque catégorie. La barre devient rouge si vous dépassez.</p>
+            <p className="text-xs text-gray-500 mb-5">Tapez une limite pour chaque catégorie.</p>
             {allCats.map(cat => {
               const spent = expenses.filter(e=>e.category===cat).reduce((s,e)=>s+e.amount,0)
               const bud = budgets.find(b=>b.category===cat)
@@ -506,7 +595,7 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="bg-blue-50 rounded-lg p-3 mb-4 text-xs text-blue-700">
-              Ces dépenses se répètent chaque mois. Cliquez "↺ Récurrents" dans l'onglet Dépenses pour les charger automatiquement.
+              Ces dépenses se répètent chaque mois. Cliquez "↺ Récurrents" dans Dépenses pour les charger automatiquement.
             </div>
             {recurring.length === 0 ? (
               <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
@@ -557,8 +646,7 @@ export default function Dashboard() {
                 </thead>
                 <tbody>
                   {MONTHS.map((m,i) => {
-                    const mEntries = expenses.filter(e=>e.month===i)
-                    const mTotal = mEntries.reduce((s,e)=>s+e.amount,0)
+                    const mTotal = expenses.filter(e=>e.month===i).reduce((s,e)=>s+e.amount,0)
                     if (mTotal === 0) return null
                     return (
                       <tr key={i} className={i%2===0?'bg-white':'bg-gray-50'}>
