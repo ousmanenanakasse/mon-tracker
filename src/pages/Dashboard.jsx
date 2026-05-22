@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, LineChart, Line, Legend } from 'recharts'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 const MONTHS = ['Jan','Fév','Mars','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc']
 const MFULL = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre']
@@ -40,6 +42,7 @@ export default function Dashboard() {
   const [editAmt, setEditAmt] = useState('')
   const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark')
   const [reportYear, setReportYear] = useState(now.getFullYear())
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     if (dark) { document.documentElement.classList.add('dark'); localStorage.setItem('theme','dark') }
@@ -81,8 +84,7 @@ export default function Dashboard() {
   }
 
   async function loadYearExpenses() {
-    const { data } = await supabase.from('expenses').select('*')
-      .eq('year', reportYear)
+    const { data } = await supabase.from('expenses').select('*').eq('year', reportYear)
     if (data) setAllYearExpenses(data)
   }
 
@@ -112,6 +114,10 @@ export default function Dashboard() {
 
   function convRaw(amount, from) {
     return (amount/(rates[from||baseCur]||1))*(rates[dispCur]||1)
+  }
+
+  function convNum(amount, from) {
+    return parseFloat(convRaw(amount, from).toFixed(2))
   }
 
   async function addExpense() {
@@ -179,24 +185,162 @@ export default function Dashboard() {
 
   async function logout() { await supabase.auth.signOut() }
 
+  // PDF Export
+  function exportPDF(type) {
+    const doc = new jsPDF()
+    const curSym = (CURS.find(x=>x.code===dispCur)||CURS[0]).sym
+    const fmtAmt = (amt, from) => curSym+' '+convRaw(amt,from).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})
+
+    if (type === 'monthly') {
+      // Header
+      doc.setFillColor(26, 107, 60)
+      doc.rect(0, 0, 220, 30, 'F')
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(18)
+      doc.text('BudgetMate 🤝', 14, 12)
+      doc.setFontSize(11)
+      doc.text(`Rapport mensuel — ${MFULL[month]} ${year}`, 14, 22)
+      doc.setTextColor(0, 0, 0)
+
+      // Summary
+      doc.setFontSize(10)
+      doc.text(`Total: ${fmtAmt(total)}`, 14, 40)
+      doc.text(`${n1} (${share}%): ${fmtAmt(s1)}`, 14, 48)
+      doc.text(`${n2} (${100-share}%): ${fmtAmt(s2)}`, 14, 56)
+      doc.text(`Nombre de dépenses: ${expenses.length}`, 14, 64)
+
+      // Table
+      const rows = []
+      Object.entries(byCat).forEach(([cat, catRows]) => {
+        catRows.forEach(e => {
+          rows.push([
+            cat,
+            e.description || cat,
+            fmtAmt(e.amount, e.currency),
+            fmtAmt(e.amount*share/100, e.currency),
+            fmtAmt(e.amount*(100-share)/100, e.currency),
+          ])
+        })
+        const catTotal = catRows.reduce((s,e)=>s+e.amount,0)
+        rows.push(['', `Sous-total ${cat}`, fmtAmt(catTotal), fmtAmt(catTotal*share/100), fmtAmt(catTotal*(100-share)/100)])
+      })
+
+      autoTable(doc, {
+        startY: 72,
+        head: [['Catégorie', 'Description', 'Montant', n1, n2]],
+        body: rows,
+        headStyles: { fillColor: [26, 107, 60], textColor: 255, fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [245, 250, 245] },
+        styles: { fontSize: 9 },
+        didParseCell: (data) => {
+          if (data.row.raw[1]?.startsWith('Sous-total')) {
+            data.cell.styles.fillColor = [212, 237, 218]
+            data.cell.styles.fontStyle = 'bold'
+          }
+        }
+      })
+
+      // Total row
+      const finalY = doc.lastAutoTable.finalY + 8
+      doc.setFillColor(26, 107, 60)
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(10)
+      doc.roundedRect(14, finalY, 182, 10, 2, 2, 'F')
+      doc.text(`TOTAL: ${fmtAmt(total)}`, 16, finalY+7)
+      doc.text(`${n1}: ${fmtAmt(s1)}`, 80, finalY+7)
+      doc.text(`${n2}: ${fmtAmt(s2)}`, 140, finalY+7)
+
+      doc.save(`BudgetMate_${MFULL[month]}_${year}.pdf`)
+
+    } else {
+      // Annual PDF
+      doc.setFillColor(26, 107, 60)
+      doc.rect(0, 0, 220, 30, 'F')
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(18)
+      doc.text('BudgetMate 🤝', 14, 12)
+      doc.setFontSize(11)
+      doc.text(`Rapport annuel — ${reportYear}`, 14, 22)
+      doc.setTextColor(0, 0, 0)
+
+      doc.setFontSize(10)
+      doc.text(`Total ${reportYear}: ${fmtAmt(yearTotal)}`, 14, 40)
+      doc.text(`${n1} (${share}%): ${fmtAmt(yearS1)}`, 14, 48)
+      doc.text(`${n2} (${100-share}%): ${fmtAmt(yearS2)}`, 14, 56)
+
+      // Monthly table
+      const monthRows = MONTHS.map((m,i) => {
+        const mTotal = allYearExpenses.filter(e=>e.month===i).reduce((s,e)=>s+(e.amount||0),0)
+        return [MFULL[i], mTotal>0?fmtAmt(mTotal):'—', mTotal>0?fmtAmt(mTotal*share/100):'—', mTotal>0?fmtAmt(mTotal*(100-share)/100):'—']
+      })
+
+      autoTable(doc, {
+        startY: 64,
+        head: [['Mois', 'Total', n1, n2]],
+        body: monthRows,
+        headStyles: { fillColor: [26, 107, 60], textColor: 255, fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [245, 250, 245] },
+        styles: { fontSize: 9 },
+      })
+
+      // Category table
+      doc.addPage()
+      doc.setFontSize(13)
+      doc.setTextColor(26, 107, 60)
+      doc.text(`Total par catégorie — ${reportYear}`, 14, 20)
+      doc.setTextColor(0,0,0)
+
+      const catRows = yearCatData.map(d => [
+        d.name,
+        fmtAmt(yearByCat[d.name]),
+        fmtAmt(yearByCat[d.name]*share/100),
+        fmtAmt(yearByCat[d.name]*(100-share)/100),
+        yearTotal>0?(yearByCat[d.name]/yearTotal*100).toFixed(1)+'%':'—'
+      ])
+
+      autoTable(doc, {
+        startY: 28,
+        head: [['Catégorie', 'Total', n1, n2, '% du total']],
+        body: catRows,
+        headStyles: { fillColor: [26, 107, 60], textColor: 255, fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [245, 250, 245] },
+        styles: { fontSize: 9 },
+      })
+
+      doc.save(`BudgetMate_Annuel_${reportYear}.pdf`)
+    }
+  }
+
   const total = expenses.reduce((s,e)=>s+(e.amount||0),0)
   const s1 = total*share/100
   const s2 = total*(100-share)/100
-  const byCat = expenses.reduce((acc,e)=>{
+
+  // Search filter
+  const filteredExpenses = search.trim()===''
+    ? expenses
+    : expenses.filter(e=>
+        e.category.toLowerCase().includes(search.toLowerCase()) ||
+        (e.description||'').toLowerCase().includes(search.toLowerCase())
+      )
+
+  const byCat = filteredExpenses.reduce((acc,e)=>{
     if (!acc[e.category]) acc[e.category]=[]
     acc[e.category].push(e)
     return acc
   },{})
+
   const allCats = [...new Set([...CATS,...expenses.map(e=>e.category)])]
   const n1 = name1||'Personne 1'
   const n2 = name2||'Personne 2'
-  const pieData = Object.entries(byCat).map(([cat,rows])=>({
-    name:cat, value:parseFloat(convRaw(rows.reduce((s,e)=>s+e.amount,0)).toFixed(2))
-  }))
+  const pieData = Object.entries(expenses.reduce((acc,e)=>{
+    if (!acc[e.category]) acc[e.category]=0
+    acc[e.category]+=e.amount||0
+    return acc
+  },{})).map(([cat,amt])=>({name:cat,value:parseFloat(convRaw(amt).toFixed(2))}))
+
   const curSym = (CURS.find(x=>x.code===dispCur)||CURS[0]).sym
   const years = Array.from({length:11},(_,i)=>2024+i)
 
-  // Annual report data
   const yearTotal = allYearExpenses.reduce((s,e)=>s+(e.amount||0),0)
   const yearS1 = yearTotal*share/100
   const yearS2 = yearTotal*(100-share)/100
@@ -206,9 +350,9 @@ export default function Dashboard() {
     const mTotal = mExp.reduce((s,e)=>s+(e.amount||0),0)
     return {
       name:m,
-      total:parseFloat(convRaw(mTotal).toFixed(2)),
-      [n1]:parseFloat(convRaw(mTotal*share/100).toFixed(2)),
-      [n2]:parseFloat(convRaw(mTotal*(100-share)/100).toFixed(2)),
+      total:convNum(mTotal),
+      [n1]:convNum(mTotal*share/100),
+      [n2]:convNum(mTotal*(100-share)/100),
     }
   })
 
@@ -219,7 +363,7 @@ export default function Dashboard() {
   },{})
 
   const yearCatData = Object.entries(yearByCat)
-    .map(([cat,amt])=>({name:cat, value:parseFloat(convRaw(amt).toFixed(2))}))
+    .map(([cat,amt])=>({name:cat,value:convNum(amt)}))
     .sort((a,b)=>b.value-a.value)
 
   // Dark mode
@@ -230,7 +374,7 @@ export default function Dashboard() {
   const textPrimary = dark?'text-gray-100':'text-gray-800'
   const textSecondary = dark?'text-gray-400':'text-gray-500'
   const rowEven = dark?'bg-gray-800':'bg-white'
-  const rowOdd = dark?'bg-gray-750':'bg-gray-50'
+  const rowOdd = dark?'bg-gray-900':'bg-gray-50'
   const sectionRow = dark?'bg-gray-700 text-green-400':'bg-green-50 text-green-800'
   const subtotalRow = dark?'bg-gray-700 text-green-400':'bg-green-100 text-green-800'
   const tabActive = 'bg-green-700 text-white'
@@ -256,8 +400,7 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
-          <button onClick={()=>setDark(!dark)}
-            className="bg-green-800 hover:bg-green-600 px-3 py-1 rounded text-sm">
+          <button onClick={()=>setDark(!dark)} className="bg-green-800 hover:bg-green-600 px-3 py-1 rounded text-sm">
             {dark?'☀️':'🌙'}
           </button>
           <button onClick={logout} className="bg-green-800 hover:bg-green-900 px-3 py-1 rounded text-xs">
@@ -320,6 +463,10 @@ export default function Dashboard() {
                 className={`${cardBorder} border px-4 py-2 rounded-lg text-sm ${textSecondary}`}>
                 ↺ Récurrents
               </button>
+              <button onClick={()=>exportPDF('monthly')}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium">
+                📤 PDF
+              </button>
               <div className={`flex items-center gap-2 ${cardBorder} border rounded-lg px-3 py-2`}>
                 <span className={`text-xs ${textSecondary}`}>{n1}</span>
                 <input type="range" min="0" max="100" step="5" value={share}
@@ -328,6 +475,30 @@ export default function Dashboard() {
                 <span className={`text-xs ${textSecondary}`}>{share}%/{100-share}%</span>
               </div>
             </div>
+
+            {/* SEARCH BAR */}
+            <div className="mb-4 relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+              <input
+                type="text"
+                placeholder="Rechercher une dépense ou catégorie..."
+                value={search}
+                onChange={e=>setSearch(e.target.value)}
+                className={`w-full ${input} border rounded-xl pl-9 pr-4 py-2.5 text-sm outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500`}
+              />
+              {search && (
+                <button onClick={()=>setSearch('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-lg">
+                  ×
+                </button>
+              )}
+            </div>
+
+            {search && (
+              <div className={`mb-3 text-xs ${textSecondary}`}>
+                {filteredExpenses.length} résultat{filteredExpenses.length!==1?'s':''} pour "<span className="font-medium text-green-600">{search}</span>"
+              </div>
+            )}
 
             {showAdd && (
               <div className={`${cardBorder} border rounded-xl p-4 mb-4 shadow-sm`}>
@@ -367,9 +538,9 @@ export default function Dashboard() {
             )}
 
             <div className={`${cardBorder} border rounded-xl overflow-hidden shadow-sm`}>
-              {expenses.length===0 ? (
+              {filteredExpenses.length===0 ? (
                 <div className={`p-8 text-center ${textSecondary} text-sm`}>
-                  Aucune dépense pour {MFULL[month]} {year}. Cliquez "+ Ajouter" !
+                  {search ? `Aucun résultat pour "${search}"` : `Aucune dépense pour ${MFULL[month]} ${year}. Cliquez "+ Ajouter" !`}
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -507,8 +678,8 @@ export default function Dashboard() {
                   <p className={`text-xs ${textSecondary} mb-4`}>{share}% / {100-share}%</p>
                   <ResponsiveContainer width="100%" height={220}>
                     <BarChart data={[
-                      {name:n1, montant:parseFloat(convRaw(s1).toFixed(2))},
-                      {name:n2, montant:parseFloat(convRaw(s2).toFixed(2))},
+                      {name:n1,montant:convNum(s1)},
+                      {name:n2,montant:convNum(s2)},
                     ]} margin={{top:5,right:20,left:10,bottom:5}}>
                       <CartesianGrid strokeDasharray="3 3" stroke={dark?'#374151':'#f0f0f0'}/>
                       <XAxis dataKey="name" tick={{fontSize:13,fontWeight:500,fill:dark?'#9ca3af':'#6b7280'}}/>
@@ -538,16 +709,18 @@ export default function Dashboard() {
         {/* RAPPORT ANNUEL */}
         {tab==='rapport' && (
           <div className="space-y-6">
-            {/* Year selector */}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <label className={`text-sm font-medium ${textPrimary}`}>Année :</label>
-              <select value={reportYear} onChange={e=>{setReportYear(parseInt(e.target.value))}}
+              <select value={reportYear} onChange={e=>setReportYear(parseInt(e.target.value))}
                 className={`${select} border rounded-lg px-3 py-2 text-sm`}>
                 {years.map(y=><option key={y} value={y}>{y}</option>)}
               </select>
+              <button onClick={()=>exportPDF('annual')}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium">
+                📤 Exporter PDF annuel
+              </button>
             </div>
 
-            {/* Annual summary cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[
                 {label:`Total ${reportYear}`,val:conv(yearTotal),color:textPrimary},
@@ -564,11 +737,10 @@ export default function Dashboard() {
 
             {allYearExpenses.length===0 ? (
               <div className={`${cardBorder} border rounded-xl p-8 text-center ${textSecondary} text-sm`}>
-                Aucune dépense pour {reportYear}. Ajoutez des dépenses pour voir le rapport !
+                Aucune dépense pour {reportYear}.
               </div>
             ) : (
               <>
-                {/* LINE CHART - evolution month by month */}
                 <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
                   <h2 className={`text-base font-semibold ${textPrimary} mb-1`}>📈 Évolution mensuelle {reportYear}</h2>
                   <p className={`text-xs ${textSecondary} mb-4`}>Total des dépenses mois par mois</p>
@@ -586,7 +758,6 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
 
-                {/* BAR CHART - monthly comparison */}
                 <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
                   <h2 className={`text-base font-semibold ${textPrimary} mb-1`}>📊 Dépenses par mois {reportYear}</h2>
                   <p className={`text-xs ${textSecondary} mb-4`}>{n1} vs {n2}</p>
@@ -603,9 +774,8 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
 
-                {/* ALL 12 MONTHS TABLE */}
                 <div className={`${cardBorder} border rounded-xl overflow-hidden shadow-sm`}>
-                  <div className="px-6 py-4 border-b border-gray-200">
+                  <div className="px-6 py-4">
                     <h2 className={`text-base font-semibold ${textPrimary}`}>📅 Tous les mois — {reportYear}</h2>
                   </div>
                   <div className="overflow-x-auto">
@@ -657,9 +827,8 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* TOTAL PER CATEGORY */}
                 <div className={`${cardBorder} border rounded-xl overflow-hidden shadow-sm`}>
-                  <div className="px-6 py-4 border-b border-gray-200">
+                  <div className="px-6 py-4">
                     <h2 className={`text-base font-semibold ${textPrimary}`}>🗂️ Total par catégorie — {reportYear}</h2>
                   </div>
                   <div className="overflow-x-auto">
