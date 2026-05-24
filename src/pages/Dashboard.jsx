@@ -6,11 +6,11 @@ import autoTable from 'jspdf-autotable'
 
 const MONTHS = ['Jan','Fév','Mars','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc']
 const MFULL = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre']
-const CATS = ['Loyer mensuel','Aidat','Eau et Gaz','Internet','Électricité','Nourriture','Transport','Santé','Shopping','Loisirs','Autre']
+const CATS = ['Loyer mensuel','Aidat','Eau et Gaz','Internet','Electricite','Nourriture','Transport','Sante','Shopping','Loisirs','Autre']
 const CURS = [
   {code:'EUR',sym:'€',flag:'🇪🇺',label:'Euro'},
   {code:'USD',sym:'$',flag:'🇺🇸',label:'Dollar'},
-  {code:'TRY',sym:'₺',flag:'🇹🇷',label:'Livre turque'},
+  {code:'TRY',sym:'TRY',flag:'🇹🇷',label:'Livre turque'},
   {code:'XOF',sym:'Fr',flag:'🌍',label:'Franc CFA'},
 ]
 const COLORS = ['#1a6b3c','#2196f3','#ff9800','#9c27b0','#e53935','#00bcd4','#8bc34a','#ff5722','#795548','#607d8b','#f06292']
@@ -43,7 +43,6 @@ export default function Dashboard() {
   const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark')
   const [reportYear, setReportYear] = useState(now.getFullYear())
   const [search, setSearch] = useState('')
-  // Sort & Filter
   const [sortField, setSortField] = useState('date')
   const [sortDir, setSortDir] = useState('desc')
   const [filterCat, setFilterCat] = useState('all')
@@ -107,7 +106,7 @@ export default function Dashboard() {
     await supabase.from('settings').upsert({
       user_id: user.id, name1, name2, share, base_cur: baseCur
     }, { onConflict: 'user_id' })
-    setSaveMsg('✅ Sauvegardé!')
+    setSaveMsg('✅ Sauvegarde!')
     setTimeout(() => setSaveMsg(''), 2000)
   }
 
@@ -139,7 +138,7 @@ export default function Dashboard() {
   }
 
   async function deleteExpense(id) {
-    if (!confirm('Supprimer cette dépense ?')) return
+    if (!confirm('Supprimer cette depense ?')) return
     await supabase.from('expenses').delete().eq('id', id)
     loadExpenses()
   }
@@ -168,12 +167,12 @@ export default function Dashboard() {
         added++
       }
     }
-    if (added===0) alert('Récurrents déjà chargés!')
+    if (added===0) alert('Recurrents deja charges!')
     else loadExpenses()
   }
 
   async function addRecurring() {
-    const cat = prompt('Catégorie:'); if (!cat) return
+    const cat = prompt('Categorie:'); if (!cat) return
     const desc = prompt('Description (optionnel):')||''
     const amt = parseFloat(prompt('Montant mensuel:'))
     if (isNaN(amt)||amt<=0) return
@@ -206,46 +205,140 @@ export default function Dashboard() {
     setFilterMinAmt(''); setFilterMaxAmt(''); setSortField('date'); setSortDir('desc')
   }
 
-  // Apply search + filter + sort
-  let processed = [...expenses]
+  // PDF export - uses currency CODE not symbol to avoid encoding issues
+  function exportPDF(type) {
+    const doc = new jsPDF()
+    const pdfCur = dispCur
+    const fmtAmt = (amt,from) => pdfCur+' '+convRaw(amt,from).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})
 
-  // Search
-  if (search.trim()) {
-    processed = processed.filter(e=>
-      e.category.toLowerCase().includes(search.toLowerCase()) ||
-      (e.description||'').toLowerCase().includes(search.toLowerCase())
-    )
+    doc.setFillColor(26,107,60)
+    doc.rect(0,0,220,30,'F')
+    doc.setTextColor(255,255,255)
+    doc.setFontSize(18)
+    doc.text('BudgetMate',14,12)
+    doc.setFontSize(11)
+
+    if (type==='monthly') {
+      doc.text('Rapport mensuel - '+MFULL[month]+' '+year,14,22)
+      doc.setTextColor(0,0,0)
+      doc.setFontSize(10)
+      doc.text('Total: '+fmtAmt(total),14,40)
+      doc.text(n1+' ('+share+'%): '+fmtAmt(s1),14,48)
+      doc.text(n2+' ('+(100-share)+'%): '+fmtAmt(s2),14,56)
+      doc.text('Nombre de depenses: '+expenses.length,14,64)
+
+      const rows = []
+      const expByCat = expenses.reduce((acc,e)=>{
+        if(!acc[e.category])acc[e.category]=[]
+        acc[e.category].push(e)
+        return acc
+      },{})
+      Object.entries(expByCat).forEach(([cat,catRows])=>{
+        catRows.forEach(e=>rows.push([
+          cat,
+          e.description||cat,
+          fmtAmt(e.amount,e.currency),
+          fmtAmt(e.amount*share/100,e.currency),
+          fmtAmt(e.amount*(100-share)/100,e.currency)
+        ]))
+        const ct=catRows.reduce((s,e)=>s+e.amount,0)
+        rows.push(['','Sous-total '+cat,fmtAmt(ct),fmtAmt(ct*share/100),fmtAmt(ct*(100-share)/100)])
+      })
+
+      autoTable(doc,{
+        startY:72,
+        head:[['Categorie','Description','Montant',n1,n2]],
+        body:rows,
+        headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},
+        alternateRowStyles:{fillColor:[245,250,245]},
+        styles:{fontSize:9},
+        didParseCell:(data)=>{
+          if(data.row.raw[1]?.startsWith('Sous-total')){
+            data.cell.styles.fillColor=[212,237,218]
+            data.cell.styles.fontStyle='bold'
+          }
+        }
+      })
+
+      const fy=doc.lastAutoTable.finalY+8
+      doc.setFillColor(26,107,60)
+      doc.setTextColor(255,255,255)
+      doc.setFontSize(10)
+      doc.roundedRect(14,fy,182,10,2,2,'F')
+      doc.text('TOTAL: '+fmtAmt(total),16,fy+7)
+      doc.text(n1+': '+fmtAmt(s1),80,fy+7)
+      doc.text(n2+': '+fmtAmt(s2),140,fy+7)
+      doc.save('BudgetMate_'+MFULL[month]+'_'+year+'.pdf')
+
+    } else {
+      doc.text('Rapport annuel - '+reportYear,14,22)
+      doc.setTextColor(0,0,0)
+      doc.setFontSize(10)
+      doc.text('Total '+reportYear+': '+fmtAmt(yearTotal),14,40)
+      doc.text(n1+' ('+share+'%): '+fmtAmt(yearS1),14,48)
+      doc.text(n2+' ('+(100-share)+'%): '+fmtAmt(yearS2),14,56)
+
+      const monthRows=MONTHS.map((_,i)=>{
+        const mt=allYearExpenses.filter(e=>e.month===i).reduce((s,e)=>s+(e.amount||0),0)
+        return[MFULL[i],mt>0?fmtAmt(mt):'--',mt>0?fmtAmt(mt*share/100):'--',mt>0?fmtAmt(mt*(100-share)/100):'--']
+      })
+
+      autoTable(doc,{
+        startY:64,
+        head:[['Mois','Total',n1,n2]],
+        body:monthRows,
+        headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},
+        alternateRowStyles:{fillColor:[245,250,245]},
+        styles:{fontSize:9}
+      })
+
+      doc.addPage()
+      doc.setFontSize(13)
+      doc.setTextColor(26,107,60)
+      doc.text('Total par categorie - '+reportYear,14,20)
+      doc.setTextColor(0,0,0)
+
+      const catRows=yearCatData.map(d=>[
+        d.name,
+        fmtAmt(yearByCat[d.name]),
+        fmtAmt(yearByCat[d.name]*share/100),
+        fmtAmt(yearByCat[d.name]*(100-share)/100),
+        yearTotal>0?(yearByCat[d.name]/yearTotal*100).toFixed(1)+'%':'--'
+      ])
+
+      autoTable(doc,{
+        startY:28,
+        head:[['Categorie','Total',n1,n2,'% du total']],
+        body:catRows,
+        headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},
+        alternateRowStyles:{fillColor:[245,250,245]},
+        styles:{fontSize:9}
+      })
+
+      doc.save('BudgetMate_Annuel_'+reportYear+'.pdf')
+    }
   }
 
-  // Filter by category
+  // Filter + Sort
+  let processed = [...expenses]
+  if (search.trim()) processed = processed.filter(e=>e.category.toLowerCase().includes(search.toLowerCase())||(e.description||'').toLowerCase().includes(search.toLowerCase()))
   if (filterCat!=='all') processed = processed.filter(e=>e.category===filterCat)
-
-  // Filter by recurring
   if (filterRecurring==='recurring') processed = processed.filter(e=>e.is_recurring)
   if (filterRecurring==='normal') processed = processed.filter(e=>!e.is_recurring)
-
-  // Filter by amount range
   if (filterMinAmt!=='') processed = processed.filter(e=>e.amount>=parseFloat(filterMinAmt))
   if (filterMaxAmt!=='') processed = processed.filter(e=>e.amount<=parseFloat(filterMaxAmt))
-
-  // Sort
   processed.sort((a,b)=>{
-    let va, vb
-    if (sortField==='amount') { va=a.amount; vb=b.amount }
-    else if (sortField==='description') { va=(a.description||a.category).toLowerCase(); vb=(b.description||b.category).toLowerCase() }
-    else if (sortField==='category') { va=a.category.toLowerCase(); vb=b.category.toLowerCase() }
-    else { va=new Date(a.created_at); vb=new Date(b.created_at) }
-    if (va<vb) return sortDir==='asc'?-1:1
-    if (va>vb) return sortDir==='asc'?1:-1
+    let va,vb
+    if (sortField==='amount'){va=a.amount;vb=b.amount}
+    else if (sortField==='description'){va=(a.description||a.category).toLowerCase();vb=(b.description||b.category).toLowerCase()}
+    else if (sortField==='category'){va=a.category.toLowerCase();vb=b.category.toLowerCase()}
+    else{va=new Date(a.created_at);vb=new Date(b.created_at)}
+    if(va<vb) return sortDir==='asc'?-1:1
+    if(va>vb) return sortDir==='asc'?1:-1
     return 0
   })
 
-  const byCat = processed.reduce((acc,e)=>{
-    if (!acc[e.category]) acc[e.category]=[]
-    acc[e.category].push(e)
-    return acc
-  },{})
-
+  const byCat = processed.reduce((acc,e)=>{if(!acc[e.category])acc[e.category]=[];acc[e.category].push(e);return acc},{})
   const total = expenses.reduce((s,e)=>s+(e.amount||0),0)
   const s1 = total*share/100
   const s2 = total*(100-share)/100
@@ -253,80 +346,20 @@ export default function Dashboard() {
   const uniqueCats = [...new Set(expenses.map(e=>e.category))]
   const n1 = name1||'Personne 1'
   const n2 = name2||'Personne 2'
-  const pieData = Object.entries(expenses.reduce((acc,e)=>{
-    if (!acc[e.category]) acc[e.category]=0
-    acc[e.category]+=e.amount||0
-    return acc
-  },{})).map(([cat,amt])=>({name:cat,value:convNum(amt)}))
+  const pieData = Object.entries(expenses.reduce((acc,e)=>{if(!acc[e.category])acc[e.category]=0;acc[e.category]+=e.amount||0;return acc},{})).map(([cat,amt])=>({name:cat,value:convNum(amt)}))
   const curSym = (CURS.find(x=>x.code===dispCur)||CURS[0]).sym
   const years = Array.from({length:11},(_,i)=>2024+i)
   const yearTotal = allYearExpenses.reduce((s,e)=>s+(e.amount||0),0)
   const yearS1 = yearTotal*share/100
   const yearS2 = yearTotal*(100-share)/100
   const monthlyData = MONTHS.map((m,i)=>{
-    const mExp = allYearExpenses.filter(e=>e.month===i)
-    const mTotal = mExp.reduce((s,e)=>s+(e.amount||0),0)
-    return { name:m, total:convNum(mTotal), [n1]:convNum(mTotal*share/100), [n2]:convNum(mTotal*(100-share)/100) }
+    const mExp=allYearExpenses.filter(e=>e.month===i)
+    const mTotal=mExp.reduce((s,e)=>s+(e.amount||0),0)
+    return{name:m,total:convNum(mTotal),[n1]:convNum(mTotal*share/100),[n2]:convNum(mTotal*(100-share)/100)}
   })
-  const yearByCat = allYearExpenses.reduce((acc,e)=>{
-    if (!acc[e.category]) acc[e.category]=0
-    acc[e.category]+=e.amount||0
-    return acc
-  },{})
-  const yearCatData = Object.entries(yearByCat)
-    .map(([cat,amt])=>({name:cat,value:convNum(amt)}))
-    .sort((a,b)=>b.value-a.value)
-
+  const yearByCat = allYearExpenses.reduce((acc,e)=>{if(!acc[e.category])acc[e.category]=0;acc[e.category]+=e.amount||0;return acc},{})
+  const yearCatData = Object.entries(yearByCat).map(([cat,amt])=>({name:cat,value:convNum(amt)})).sort((a,b)=>b.value-a.value)
   const hasActiveFilters = search||filterCat!=='all'||filterRecurring!=='all'||filterMinAmt||filterMaxAmt
-
-  // PDF Export
-  function exportPDF(type) {
-    const doc = new jsPDF()
-    const fmtAmt = (amt,from) => curSym+' '+convRaw(amt,from).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})
-    doc.setFillColor(26,107,60); doc.rect(0,0,220,30,'F')
-    doc.setTextColor(255,255,255); doc.setFontSize(18)
-    doc.text('BudgetMate', 14, 12); doc.setFontSize(11)
-    if (type==='monthly') {
-      doc.text(`Rapport mensuel — ${MFULL[month]} ${year}`, 14, 22)
-      doc.setTextColor(0,0,0); doc.setFontSize(10)
-      doc.text(`Total: ${fmtAmt(total)}`, 14, 40)
-      doc.text(`${n1} (${share}%): ${fmtAmt(s1)}`, 14, 48)
-      doc.text(`${n2} (${100-share}%): ${fmtAmt(s2)}`, 14, 56)
-      doc.text(`Nombre de dépenses: ${expenses.length}`, 14, 64)
-      const rows = []
-      Object.entries(expenses.reduce((acc,e)=>{if(!acc[e.category])acc[e.category]=[];acc[e.category].push(e);return acc},{})).forEach(([cat,catRows])=>{
-        catRows.forEach(e=>rows.push([cat,e.description||cat,fmtAmt(e.amount,e.currency),fmtAmt(e.amount*share/100,e.currency),fmtAmt(e.amount*(100-share)/100,e.currency)]))
-        const ct=catRows.reduce((s,e)=>s+e.amount,0)
-        rows.push(['',`Sous-total ${cat}`,fmtAmt(ct),fmtAmt(ct*share/100),fmtAmt(ct*(100-share)/100)])
-      })
-      autoTable(doc,{startY:72,head:[['Catégorie','Description','Montant',n1,n2]],body:rows,
-        headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},
-        alternateRowStyles:{fillColor:[245,250,245]},styles:{fontSize:9},
-        didParseCell:(data)=>{if(data.row.raw[1]?.startsWith('Sous-total')){data.cell.styles.fillColor=[212,237,218];data.cell.styles.fontStyle='bold'}}
-      })
-      const fy=doc.lastAutoTable.finalY+8
-      doc.setFillColor(26,107,60); doc.setTextColor(255,255,255); doc.setFontSize(10)
-      doc.roundedRect(14,fy,182,10,2,2,'F')
-      doc.text(`TOTAL: ${fmtAmt(total)}`,16,fy+7)
-      doc.text(`${n1}: ${fmtAmt(s1)}`,80,fy+7)
-      doc.text(`${n2}: ${fmtAmt(s2)}`,140,fy+7)
-      doc.save(`BudgetMate_${MFULL[month]}_${year}.pdf`)
-    } else {
-      doc.text(`Rapport annuel — ${reportYear}`,14,22)
-      doc.setTextColor(0,0,0); doc.setFontSize(10)
-      doc.text(`Total ${reportYear}: ${fmtAmt(yearTotal)}`,14,40)
-      doc.text(`${n1} (${share}%): ${fmtAmt(yearS1)}`,14,48)
-      doc.text(`${n2} (${100-share}%): ${fmtAmt(yearS2)}`,14,56)
-      const monthRows=MONTHS.map((_,i)=>{const mt=allYearExpenses.filter(e=>e.month===i).reduce((s,e)=>s+(e.amount||0),0);return[MFULL[i],mt>0?fmtAmt(mt):'—',mt>0?fmtAmt(mt*share/100):'—',mt>0?fmtAmt(mt*(100-share)/100):'—']})
-      autoTable(doc,{startY:64,head:[['Mois','Total',n1,n2]],body:monthRows,headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},alternateRowStyles:{fillColor:[245,250,245]},styles:{fontSize:9}})
-      doc.addPage()
-      doc.setFontSize(13); doc.setTextColor(26,107,60)
-      doc.text(`Total par catégorie — ${reportYear}`,14,20); doc.setTextColor(0,0,0)
-      const catRows=yearCatData.map(d=>[d.name,fmtAmt(yearByCat[d.name]),fmtAmt(yearByCat[d.name]*share/100),fmtAmt(yearByCat[d.name]*(100-share)/100),yearTotal>0?(yearByCat[d.name]/yearTotal*100).toFixed(1)+'%':'—'])
-      autoTable(doc,{startY:28,head:[['Catégorie','Total',n1,n2,'% du total']],body:catRows,headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},alternateRowStyles:{fillColor:[245,250,245]},styles:{fontSize:9}})
-      doc.save(`BudgetMate_Annuel_${reportYear}.pdf`)
-    }
-  }
 
   // Dark mode
   const card = dark?'bg-gray-800 border-gray-700':'bg-white border-gray-100'
@@ -362,17 +395,17 @@ export default function Dashboard() {
             ))}
           </div>
           <button onClick={()=>setDark(!dark)} className="bg-green-800 hover:bg-green-600 px-3 py-1 rounded text-sm">{dark?'☀️':'🌙'}</button>
-          <button onClick={logout} className="bg-green-800 hover:bg-green-900 px-3 py-1 rounded text-xs">Déconnexion</button>
+          <button onClick={logout} className="bg-green-800 hover:bg-green-900 px-3 py-1 rounded text-xs">Deconnexion</button>
         </div>
       </nav>
 
       <div className="max-w-5xl mx-auto p-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           {[
-            {label:`Total ${MONTHS[month]}`,val:conv(total),color:tp},
-            {label:`${n1} (${share}%)`,val:conv(s1),color:'text-green-600'},
-            {label:`${n2} (${100-share}%)`,val:conv(s2),color:'text-blue-500'},
-            {label:'Entrées',val:expenses.length+' dépenses',color:ts},
+            {label:'Total '+MONTHS[month],val:conv(total),color:tp},
+            {label:n1+' ('+share+'%)',val:conv(s1),color:'text-green-600'},
+            {label:n2+' ('+(100-share)+'%)',val:conv(s2),color:'text-blue-500'},
+            {label:'Entrees',val:expenses.length+' depenses',color:ts},
           ].map((c,i)=>(
             <div key={i} className={`${card} rounded-xl p-4 shadow-sm border`}>
               <div className={`text-xs ${ts} mb-1`}>{c.label}</div>
@@ -383,13 +416,13 @@ export default function Dashboard() {
 
         <div className="flex gap-2 mb-4 flex-wrap">
           {[
-            {id:'depenses',label:'📋 Dépenses'},
+            {id:'depenses',label:'📋 Depenses'},
             {id:'graphiques',label:'📊 Graphiques'},
             {id:'rapport',label:'📅 Rapport Annuel'},
             {id:'budget',label:'🎯 Budget'},
-            {id:'recurrents',label:'↺ Récurrents'},
+            {id:'recurrents',label:'↺ Recurrents'},
             {id:'historique',label:'👥 Historique'},
-            {id:'reglages',label:'⚙️ Réglages'},
+            {id:'reglages',label:'⚙️ Reglages'},
           ].map(t=>(
             <button key={t.id} onClick={()=>setTab(t.id)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition border ${tab===t.id?ta:ti}`}>
@@ -398,10 +431,8 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* DEPENSES */}
         {tab==='depenses' && (
           <div>
-            {/* Toolbar */}
             <div className="flex gap-2 mb-3 flex-wrap items-center">
               <select value={month} onChange={e=>setMonth(parseInt(e.target.value))} className={`${sel} border rounded-lg px-3 py-2 text-sm`}>
                 {MONTHS.map((m,i)=><option key={i} value={i}>{m}</option>)}
@@ -410,13 +441,13 @@ export default function Dashboard() {
                 {years.map(y=><option key={y} value={y}>{y}</option>)}
               </select>
               <button onClick={()=>setShowAdd(!showAdd)} className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800">+ Ajouter</button>
-              <button onClick={applyRecurring} className={`${cardBorder} border px-4 py-2 rounded-lg text-sm ${ts}`}>↺ Récurrents</button>
+              <button onClick={applyRecurring} className={`${cardBorder} border px-4 py-2 rounded-lg text-sm ${ts}`}>↺ Recurrents</button>
               <button onClick={()=>exportPDF('monthly')} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium">📤 PDF</button>
               <button onClick={()=>setShowFilters(!showFilters)}
                 className={`border px-4 py-2 rounded-lg text-sm font-medium ${showFilters?'bg-green-700 text-white border-green-700':`${cardBorder} ${ts}`}`}>
                 🔽 Filtres {hasActiveFilters&&<span className="ml-1 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">!</span>}
               </button>
-              {hasActiveFilters&&<button onClick={resetFilters} className="text-xs text-red-500 hover:text-red-700 underline">Réinitialiser</button>}
+              {hasActiveFilters&&<button onClick={resetFilters} className="text-xs text-red-500 hover:text-red-700 underline">Reinitialiser</button>}
               <div className={`flex items-center gap-2 ${cardBorder} border rounded-lg px-3 py-2`}>
                 <span className={`text-xs ${ts}`}>{n1}</span>
                 <input type="range" min="0" max="100" step="5" value={share} onChange={e=>setShare(parseInt(e.target.value))} className="w-20"/>
@@ -425,7 +456,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Search */}
             <div className="mb-3 relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
               <input type="text" placeholder="Rechercher..." value={search} onChange={e=>setSearch(e.target.value)}
@@ -433,12 +463,11 @@ export default function Dashboard() {
               {search&&<button onClick={()=>setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-lg">×</button>}
             </div>
 
-            {/* Filter panel */}
-            {showFilters && (
+            {showFilters&&(
               <div className={`${cardBorder} border rounded-xl p-4 mb-3 shadow-sm`}>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div>
-                    <label className={`text-xs ${ts} block mb-1`}>Catégorie</label>
+                    <label className={`text-xs ${ts} block mb-1`}>Categorie</label>
                     <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className={`w-full ${sel} border rounded-lg px-2 py-1.5 text-sm`}>
                       <option value="all">Toutes</option>
                       {uniqueCats.map(c=><option key={c} value={c}>{c}</option>)}
@@ -448,8 +477,8 @@ export default function Dashboard() {
                     <label className={`text-xs ${ts} block mb-1`}>Type</label>
                     <select value={filterRecurring} onChange={e=>setFilterRecurring(e.target.value)} className={`w-full ${sel} border rounded-lg px-2 py-1.5 text-sm`}>
                       <option value="all">Tous</option>
-                      <option value="recurring">Récurrents ↺ seulement</option>
-                      <option value="normal">Non-récurrents</option>
+                      <option value="recurring">Recurrents seulement</option>
+                      <option value="normal">Non-recurrents</option>
                     </select>
                   </div>
                   <div>
@@ -459,7 +488,7 @@ export default function Dashboard() {
                   </div>
                   <div>
                     <label className={`text-xs ${ts} block mb-1`}>Montant max</label>
-                    <input type="number" placeholder="∞" value={filterMaxAmt} onChange={e=>setFilterMaxAmt(e.target.value)}
+                    <input type="number" placeholder="Max" value={filterMaxAmt} onChange={e=>setFilterMaxAmt(e.target.value)}
                       className={`w-full ${inp} border rounded-lg px-2 py-1.5 text-sm outline-none`}/>
                   </div>
                   <div>
@@ -468,33 +497,32 @@ export default function Dashboard() {
                       <option value="date">Date</option>
                       <option value="amount">Montant</option>
                       <option value="description">Description</option>
-                      <option value="category">Catégorie</option>
+                      <option value="category">Categorie</option>
                     </select>
                   </div>
                   <div>
                     <label className={`text-xs ${ts} block mb-1`}>Ordre</label>
                     <select value={sortDir} onChange={e=>setSortDir(e.target.value)} className={`w-full ${sel} border rounded-lg px-2 py-1.5 text-sm`}>
-                      <option value="desc">Décroissant ↓</option>
-                      <option value="asc">Croissant ↑</option>
+                      <option value="desc">Decroissant</option>
+                      <option value="asc">Croissant</option>
                     </select>
                   </div>
                 </div>
               </div>
             )}
 
-            {(search||hasActiveFilters) && (
+            {hasActiveFilters&&(
               <div className={`mb-2 text-xs ${ts}`}>
-                {processed.length} résultat{processed.length!==1?'s':''} 
-                {search&&<> pour "<span className="font-medium text-green-600">{search}</span>"</>}
+                {processed.length} resultat{processed.length!==1?'s':''}{search&&<> pour "<span className="font-medium text-green-600">{search}</span>"</>}
               </div>
             )}
 
-            {showAdd && (
+            {showAdd&&(
               <div className={`${cardBorder} border rounded-xl p-4 mb-4 shadow-sm`}>
-                <h3 className={`text-sm font-medium ${tp} mb-3`}>Nouvelle dépense</h3>
+                <h3 className={`text-sm font-medium ${tp} mb-3`}>Nouvelle depense</h3>
                 <div className="flex gap-2 flex-wrap">
                   <div className="flex-1 min-w-32">
-                    <input type="text" placeholder="Catégorie..." value={newCat} onChange={e=>setNewCat(e.target.value)} list="cat-suggestions"
+                    <input type="text" placeholder="Categorie..." value={newCat} onChange={e=>setNewCat(e.target.value)} list="cat-suggestions"
                       className={`w-full ${inp} border rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500`}/>
                     <datalist id="cat-suggestions">{allCats.map(c=><option key={c} value={c}/>)}</datalist>
                   </div>
@@ -516,29 +544,21 @@ export default function Dashboard() {
             )}
 
             <div className={`${cardBorder} border rounded-xl overflow-hidden shadow-sm`}>
-              {processed.length===0 ? (
+              {processed.length===0?(
                 <div className={`p-8 text-center ${ts} text-sm`}>
-                  {hasActiveFilters?'Aucun résultat pour ces filtres.':search?`Aucun résultat pour "${search}"`:`Aucune dépense pour ${MFULL[month]} ${year}. Cliquez "+ Ajouter" !`}
+                  {hasActiveFilters?'Aucun resultat pour ces filtres.':search?`Aucun resultat pour "${search}"`:`Aucune depense pour ${MFULL[month]} ${year}. Cliquez "+ Ajouter" !`}
                 </div>
-              ) : (
+              ):(
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-green-700 text-white">
                       <tr>
-                        <th className="text-left px-4 py-3 cursor-pointer hover:bg-green-600 select-none" onClick={()=>handleSort('description')}>
-                          Description {sortIcon('description')}
-                        </th>
-                        <th className="text-left px-4 py-3 cursor-pointer hover:bg-green-600 select-none" onClick={()=>handleSort('category')}>
-                          Catégorie {sortIcon('category')}
-                        </th>
-                        <th className="text-right px-4 py-3 cursor-pointer hover:bg-green-600 select-none" onClick={()=>handleSort('amount')}>
-                          Montant {sortIcon('amount')}
-                        </th>
+                        <th className="text-left px-4 py-3 cursor-pointer hover:bg-green-600 select-none" onClick={()=>handleSort('description')}>Description {sortIcon('description')}</th>
+                        <th className="text-left px-4 py-3 cursor-pointer hover:bg-green-600 select-none" onClick={()=>handleSort('category')}>Categorie {sortIcon('category')}</th>
+                        <th className="text-right px-4 py-3 cursor-pointer hover:bg-green-600 select-none" onClick={()=>handleSort('amount')}>Montant {sortIcon('amount')}</th>
                         <th className="text-right px-4 py-3">{n1}</th>
                         <th className="text-right px-4 py-3">{n2}</th>
-                        <th className="px-4 py-3 cursor-pointer hover:bg-green-600 select-none text-center" onClick={()=>handleSort('date')}>
-                          Date {sortIcon('date')}
-                        </th>
+                        <th className="px-4 py-3 cursor-pointer hover:bg-green-600 select-none text-center" onClick={()=>handleSort('date')}>Date {sortIcon('date')}</th>
                         <th className="px-4 py-3"></th>
                       </tr>
                     </thead>
@@ -546,10 +566,10 @@ export default function Dashboard() {
                       {processed.map((e,i)=>(
                         <tr key={e.id} className={i%2===0?re:ro}>
                           <td className={`px-4 py-2 ${tp}`}>
-                            {editId===e.id ? (
+                            {editId===e.id?(
                               <input type="text" value={editDesc} onChange={ev=>setEditDesc(ev.target.value)}
                                 className={`${inp} border rounded px-2 py-1 text-sm outline-none w-full`}/>
-                            ) : (
+                            ):(
                               <>{e.description||e.category}{e.is_recurring&&<span className="ml-2 text-xs bg-green-100 text-green-700 px-1 rounded">↺</span>}</>
                             )}
                           </td>
@@ -557,28 +577,24 @@ export default function Dashboard() {
                             <span className={`px-2 py-0.5 rounded-full ${dark?'bg-gray-700':'bg-gray-100'}`}>{e.category}</span>
                           </td>
                           <td className={`px-4 py-2 text-right ${tp}`}>
-                            {editId===e.id ? (
+                            {editId===e.id?(
                               <input type="number" value={editAmt} onChange={ev=>setEditAmt(ev.target.value)}
                                 onKeyDown={ev=>ev.key==='Enter'&&saveEdit(e.id)}
                                 className={`${inp} border rounded px-2 py-1 text-sm outline-none w-28 text-right`}/>
-                            ) : conv(e.amount,e.currency)}
+                            ):conv(e.amount,e.currency)}
                           </td>
-                          <td className="px-4 py-2 text-right text-green-600">
-                            {editId===e.id?'—':conv(e.amount*share/100,e.currency)}
-                          </td>
-                          <td className="px-4 py-2 text-right text-blue-500">
-                            {editId===e.id?'—':conv(e.amount*(100-share)/100,e.currency)}
-                          </td>
+                          <td className="px-4 py-2 text-right text-green-600">{editId===e.id?'--':conv(e.amount*share/100,e.currency)}</td>
+                          <td className="px-4 py-2 text-right text-blue-500">{editId===e.id?'--':conv(e.amount*(100-share)/100,e.currency)}</td>
                           <td className={`px-4 py-2 text-center text-xs ${ts}`}>
                             {new Date(e.created_at).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'})}
                           </td>
                           <td className="px-4 py-2 text-right">
-                            {editId===e.id ? (
+                            {editId===e.id?(
                               <div className="flex gap-1 justify-end">
                                 <button onClick={()=>saveEdit(e.id)} className="text-xs bg-green-700 text-white px-2 py-1 rounded">✓</button>
                                 <button onClick={()=>setEditId(null)} className={`text-xs ${dark?'bg-gray-600 text-gray-300':'bg-gray-200 text-gray-600'} px-2 py-1 rounded`}>✗</button>
                               </div>
-                            ) : (
+                            ):(
                               <div className="flex gap-1 justify-end">
                                 <button onClick={()=>startEdit(e)} className="text-gray-400 hover:text-green-600 px-1">✏️</button>
                                 <button onClick={()=>deleteExpense(e.id)} className="text-red-400 hover:text-red-600 text-lg">×</button>
@@ -588,7 +604,7 @@ export default function Dashboard() {
                         </tr>
                       ))}
                       <tr className="bg-green-700 text-white font-semibold">
-                        <td className="px-4 py-3" colSpan="2">TOTAL ({processed.length} dép.)</td>
+                        <td className="px-4 py-3" colSpan="2">TOTAL ({processed.length} dep.)</td>
                         <td className="px-4 py-3 text-right">{conv(processed.reduce((s,e)=>s+e.amount,0))}</td>
                         <td className="px-4 py-3 text-right">{conv(processed.reduce((s,e)=>s+e.amount,0)*share/100)}</td>
                         <td className="px-4 py-3 text-right">{conv(processed.reduce((s,e)=>s+e.amount,0)*(100-share)/100)}</td>
@@ -602,15 +618,14 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* GRAPHIQUES */}
-        {tab==='graphiques' && (
+        {tab==='graphiques'&&(
           <div className="space-y-6">
-            {expenses.length===0 ? (
-              <div className={`${cardBorder} border rounded-xl p-8 text-center ${ts} text-sm`}>Ajoutez des dépenses pour voir les graphiques !</div>
-            ) : (
+            {expenses.length===0?(
+              <div className={`${cardBorder} border rounded-xl p-8 text-center ${ts} text-sm`}>Ajoutez des depenses pour voir les graphiques !</div>
+            ):(
               <>
                 <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
-                  <h2 className={`text-base font-semibold ${tp} mb-1`}>🥧 Répartition par catégorie</h2>
+                  <h2 className={`text-base font-semibold ${tp} mb-1`}>🥧 Repartition par categorie</h2>
                   <p className={`text-xs ${ts} mb-4`}>{MFULL[month]} {year}</p>
                   <div className="flex flex-col md:flex-row items-center gap-6">
                     <ResponsiveContainer width="100%" height={280}>
@@ -634,13 +649,13 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
-                  <h2 className={`text-base font-semibold ${tp} mb-1`}>📊 Dépenses par catégorie</h2>
+                  <h2 className={`text-base font-semibold ${tp} mb-1`}>📊 Depenses par categorie</h2>
                   <p className={`text-xs ${ts} mb-4`}>{MFULL[month]} {year}</p>
                   <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={pieData} margin={{top:5,right:20,left:10,bottom:60}}>
                       <CartesianGrid strokeDasharray="3 3" stroke={dark?'#374151':'#f0f0f0'}/>
                       <XAxis dataKey="name" tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}} angle={-35} textAnchor="end"/>
-                      <YAxis tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}} tickFormatter={v=>`${curSym}${v.toLocaleString('fr-FR')}`}/>
+                      <YAxis tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}} tickFormatter={v=>`${curSym} ${v.toLocaleString('fr-FR')}`}/>
                       <Tooltip formatter={val=>[`${curSym} ${val.toLocaleString('fr-FR')}`,'Montant']} contentStyle={tts}/>
                       <Bar dataKey="value" radius={[4,4,0,0]}>{pieData.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}</Bar>
                     </BarChart>
@@ -648,12 +663,11 @@ export default function Dashboard() {
                 </div>
                 <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
                   <h2 className={`text-base font-semibold ${tp} mb-1`}>👥 Partage {n1} vs {n2}</h2>
-                  <p className={`text-xs ${ts} mb-4`}>{share}% / {100-share}%</p>
                   <ResponsiveContainer width="100%" height={220}>
                     <BarChart data={[{name:n1,montant:convNum(s1)},{name:n2,montant:convNum(s2)}]} margin={{top:5,right:20,left:10,bottom:5}}>
                       <CartesianGrid strokeDasharray="3 3" stroke={dark?'#374151':'#f0f0f0'}/>
                       <XAxis dataKey="name" tick={{fontSize:13,fontWeight:500,fill:dark?'#9ca3af':'#6b7280'}}/>
-                      <YAxis tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}} tickFormatter={v=>`${curSym}${v.toLocaleString('fr-FR')}`}/>
+                      <YAxis tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}} tickFormatter={v=>`${curSym} ${v.toLocaleString('fr-FR')}`}/>
                       <Tooltip formatter={val=>[`${curSym} ${val.toLocaleString('fr-FR')}`,'Montant']} contentStyle={tts}/>
                       <Bar dataKey="montant" radius={[6,6,0,0]}><Cell fill="#1a6b3c"/><Cell fill="#2196f3"/></Bar>
                     </BarChart>
@@ -668,11 +682,10 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* RAPPORT ANNUEL */}
-        {tab==='rapport' && (
+        {tab==='rapport'&&(
           <div className="space-y-6">
             <div className="flex items-center gap-3 flex-wrap">
-              <label className={`text-sm font-medium ${tp}`}>Année :</label>
+              <label className={`text-sm font-medium ${tp}`}>Annee :</label>
               <select value={reportYear} onChange={e=>setReportYear(parseInt(e.target.value))} className={`${sel} border rounded-lg px-3 py-2 text-sm`}>
                 {years.map(y=><option key={y} value={y}>{y}</option>)}
               </select>
@@ -680,9 +693,9 @@ export default function Dashboard() {
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[
-                {label:`Total ${reportYear}`,val:conv(yearTotal),color:tp},
-                {label:`${n1} (${share}%)`,val:conv(yearS1),color:'text-green-600'},
-                {label:`${n2} (${100-share}%)`,val:conv(yearS2),color:'text-blue-500'},
+                {label:'Total '+reportYear,val:conv(yearTotal),color:tp},
+                {label:n1+' ('+share+'%)',val:conv(yearS1),color:'text-green-600'},
+                {label:n2+' ('+(100-share)+'%)',val:conv(yearS2),color:'text-blue-500'},
                 {label:'Mois actifs',val:MONTHS.filter((_,i)=>allYearExpenses.some(e=>e.month===i)).length+' / 12',color:ts},
               ].map((c,i)=>(
                 <div key={i} className={`${card} rounded-xl p-4 shadow-sm border`}>
@@ -691,18 +704,17 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
-            {allYearExpenses.length===0 ? (
-              <div className={`${cardBorder} border rounded-xl p-8 text-center ${ts} text-sm`}>Aucune dépense pour {reportYear}.</div>
-            ) : (
+            {allYearExpenses.length===0?(
+              <div className={`${cardBorder} border rounded-xl p-8 text-center ${ts} text-sm`}>Aucune depense pour {reportYear}.</div>
+            ):(
               <>
                 <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
-                  <h2 className={`text-base font-semibold ${tp} mb-1`}>📈 Évolution mensuelle {reportYear}</h2>
-                  <p className={`text-xs ${ts} mb-4`}>Total des dépenses mois par mois</p>
+                  <h2 className={`text-base font-semibold ${tp} mb-1`}>📈 Evolution mensuelle {reportYear}</h2>
                   <ResponsiveContainer width="100%" height={280}>
                     <LineChart data={monthlyData} margin={{top:5,right:20,left:10,bottom:5}}>
                       <CartesianGrid strokeDasharray="3 3" stroke={dark?'#374151':'#f0f0f0'}/>
                       <XAxis dataKey="name" tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}}/>
-                      <YAxis tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}} tickFormatter={v=>`${curSym}${v.toLocaleString('fr-FR')}`}/>
+                      <YAxis tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}} tickFormatter={v=>`${curSym} ${v.toLocaleString('fr-FR')}`}/>
                       <Tooltip formatter={val=>[`${curSym} ${parseFloat(val).toLocaleString('fr-FR')}`]} contentStyle={tts}/>
                       <Legend/>
                       <Line type="monotone" dataKey="total" stroke="#1a6b3c" strokeWidth={2} dot={{r:4}} name="Total"/>
@@ -712,12 +724,12 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
                 <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
-                  <h2 className={`text-base font-semibold ${tp} mb-1`}>📊 Dépenses par mois {reportYear}</h2>
+                  <h2 className={`text-base font-semibold ${tp} mb-1`}>📊 Depenses par mois {reportYear}</h2>
                   <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={monthlyData} margin={{top:5,right:20,left:10,bottom:5}}>
                       <CartesianGrid strokeDasharray="3 3" stroke={dark?'#374151':'#f0f0f0'}/>
                       <XAxis dataKey="name" tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}}/>
-                      <YAxis tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}} tickFormatter={v=>`${curSym}${v.toLocaleString('fr-FR')}`}/>
+                      <YAxis tick={{fontSize:11,fill:dark?'#9ca3af':'#6b7280'}} tickFormatter={v=>`${curSym} ${v.toLocaleString('fr-FR')}`}/>
                       <Tooltip formatter={val=>[`${curSym} ${parseFloat(val).toLocaleString('fr-FR')}`]} contentStyle={tts}/>
                       <Legend/>
                       <Bar dataKey={n1} fill="#1a6b3c" radius={[3,3,0,0]}/>
@@ -726,7 +738,7 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
                 <div className={`${cardBorder} border rounded-xl overflow-hidden shadow-sm`}>
-                  <div className="px-6 py-4"><h2 className={`text-base font-semibold ${tp}`}>📅 Tous les mois — {reportYear}</h2></div>
+                  <div className="px-6 py-4"><h2 className={`text-base font-semibold ${tp}`}>📅 Tous les mois - {reportYear}</h2></div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-green-700 text-white">
@@ -735,22 +747,22 @@ export default function Dashboard() {
                           <th className="text-right px-4 py-3">Total</th>
                           <th className="text-right px-4 py-3">{n1}</th>
                           <th className="text-right px-4 py-3">{n2}</th>
-                          <th className="text-right px-4 py-3">Entrées</th>
+                          <th className="text-right px-4 py-3">Entrees</th>
                         </tr>
                       </thead>
                       <tbody>
                         {MONTHS.map((m,i)=>{
                           const mExp=allYearExpenses.filter(e=>e.month===i)
                           const mTotal=mExp.reduce((s,e)=>s+(e.amount||0),0)
-                          return (
+                          return(
                             <tr key={i} className={i%2===0?re:ro}>
                               <td className={`px-4 py-3 font-medium ${tp}`}>
                                 {MFULL[i]}{i===now.getMonth()&&reportYear===now.getFullYear()&&<span className="ml-2 text-xs bg-green-100 text-green-700 px-1 rounded">En cours</span>}
                               </td>
-                              <td className={`px-4 py-3 text-right ${mTotal>0?tp:ts}`}>{mTotal>0?conv(mTotal):'—'}</td>
-                              <td className={`px-4 py-3 text-right ${mTotal>0?'text-green-600':ts}`}>{mTotal>0?conv(mTotal*share/100):'—'}</td>
-                              <td className={`px-4 py-3 text-right ${mTotal>0?'text-blue-500':ts}`}>{mTotal>0?conv(mTotal*(100-share)/100):'—'}</td>
-                              <td className={`px-4 py-3 text-right ${ts}`}>{mExp.length>0?mExp.length+' dép.':'—'}</td>
+                              <td className={`px-4 py-3 text-right ${mTotal>0?tp:ts}`}>{mTotal>0?conv(mTotal):'--'}</td>
+                              <td className={`px-4 py-3 text-right ${mTotal>0?'text-green-600':ts}`}>{mTotal>0?conv(mTotal*share/100):'--'}</td>
+                              <td className={`px-4 py-3 text-right ${mTotal>0?'text-blue-500':ts}`}>{mTotal>0?conv(mTotal*(100-share)/100):'--'}</td>
+                              <td className={`px-4 py-3 text-right ${ts}`}>{mExp.length>0?mExp.length+' dep.':'--'}</td>
                             </tr>
                           )
                         })}
@@ -759,19 +771,19 @@ export default function Dashboard() {
                           <td className="px-4 py-3 text-right">{conv(yearTotal)}</td>
                           <td className="px-4 py-3 text-right">{conv(yearS1)}</td>
                           <td className="px-4 py-3 text-right">{conv(yearS2)}</td>
-                          <td className="px-4 py-3 text-right">{allYearExpenses.length} dép.</td>
+                          <td className="px-4 py-3 text-right">{allYearExpenses.length} dep.</td>
                         </tr>
                       </tbody>
                     </table>
                   </div>
                 </div>
                 <div className={`${cardBorder} border rounded-xl overflow-hidden shadow-sm`}>
-                  <div className="px-6 py-4"><h2 className={`text-base font-semibold ${tp}`}>🗂️ Total par catégorie — {reportYear}</h2></div>
+                  <div className="px-6 py-4"><h2 className={`text-base font-semibold ${tp}`}>🗂️ Total par categorie - {reportYear}</h2></div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-green-700 text-white">
                         <tr>
-                          <th className="text-left px-4 py-3">Catégorie</th>
+                          <th className="text-left px-4 py-3">Categorie</th>
                           <th className="text-right px-4 py-3">Total annuel</th>
                           <th className="text-right px-4 py-3">{n1}</th>
                           <th className="text-right px-4 py-3">{n2}</th>
@@ -790,7 +802,7 @@ export default function Dashboard() {
                             <td className={`px-4 py-3 text-right ${tp}`}>{conv(yearByCat[d.name])}</td>
                             <td className="px-4 py-3 text-right text-green-600">{conv(yearByCat[d.name]*share/100)}</td>
                             <td className="px-4 py-3 text-right text-blue-500">{conv(yearByCat[d.name]*(100-share)/100)}</td>
-                            <td className={`px-4 py-3 text-right ${ts}`}>{yearTotal>0?(yearByCat[d.name]/yearTotal*100).toFixed(1)+'%':'—'}</td>
+                            <td className={`px-4 py-3 text-right ${ts}`}>{yearTotal>0?(yearByCat[d.name]/yearTotal*100).toFixed(1)+'%':'--'}</td>
                           </tr>
                         ))}
                         <tr className="bg-green-700 text-white font-semibold">
@@ -809,18 +821,17 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* BUDGET */}
-        {tab==='budget' && (
+        {tab==='budget'&&(
           <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
             <h2 className={`text-base font-semibold ${tp} mb-2`}>🎯 Limites de budget</h2>
-            <p className={`text-xs ${ts} mb-5`}>Tapez une limite pour chaque catégorie.</p>
+            <p className={`text-xs ${ts} mb-5`}>Tapez une limite pour chaque categorie.</p>
             {allCats.map(cat=>{
               const spent=expenses.filter(e=>e.category===cat).reduce((s,e)=>s+e.amount,0)
               const bud=budgets.find(b=>b.category===cat)
               const limit=bud?.limit_amount||0
               const pct=limit?Math.min(spent/limit*100,100):0
               const color=pct>=100?'bg-red-500':pct>=75?'bg-orange-400':'bg-green-500'
-              return (
+              return(
                 <div key={cat} className="mb-5">
                   <div className="flex items-center justify-between mb-1">
                     <span className={`text-sm font-medium ${tp}`}>{cat}</span>
@@ -830,7 +841,7 @@ export default function Dashboard() {
                       <input type="number" placeholder="Limite" defaultValue={limit||''}
                         onBlur={async e=>{
                           const val=parseFloat(e.target.value); if(isNaN(val)) return
-                          const { data:{user} }=await supabase.auth.getUser()
+                          const{data:{user}}=await supabase.auth.getUser()
                           if(bud){await supabase.from('budgets').update({limit_amount:val}).eq('id',bud.id)}
                           else{await supabase.from('budgets').insert({user_id:user.id,category:cat,limit_amount:val})}
                           const{data:b}=await supabase.from('budgets').select('*'); if(b) setBudgets(b)
@@ -844,7 +855,7 @@ export default function Dashboard() {
                         <div className={`h-full rounded-full transition-all ${color}`} style={{width:`${pct}%`}}></div>
                       </div>
                       <p className={`text-xs mt-1 ${pct>=100?'text-red-500':ts}`}>
-                        {Math.round(pct)}% utilisé {pct>=100?'⚠️ Dépassé!':pct>=75?'· Attention':''}
+                        {Math.round(pct)}% utilise {pct>=100?'Depasse!':pct>=75?'Attention':''}
                       </p>
                     </>
                   )}
@@ -854,24 +865,23 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* RECURRENTS */}
-        {tab==='recurrents' && (
+        {tab==='recurrents'&&(
           <div>
             <div className="flex justify-between items-center mb-4">
-              <h2 className={`text-base font-semibold ${tp}`}>↺ Dépenses récurrentes</h2>
-              <button onClick={addRecurring} className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-800">+ Ajouter récurrent</button>
+              <h2 className={`text-base font-semibold ${tp}`}>↺ Depenses recurrentes</h2>
+              <button onClick={addRecurring} className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-800">+ Ajouter recurrent</button>
             </div>
             <div className="bg-blue-900 bg-opacity-20 rounded-lg p-3 mb-4 text-xs text-blue-400">
-              Ces dépenses se répètent chaque mois. Cliquez "↺ Récurrents" pour les charger automatiquement.
+              Ces depenses se repetent chaque mois. Cliquez "Recurrents" pour les charger automatiquement.
             </div>
-            {recurring.length===0 ? (
-              <div className={`${cardBorder} border rounded-xl p-8 text-center ${ts} text-sm`}>Aucun récurrent. Ajoutez votre loyer, internet, électricité...</div>
-            ) : (
+            {recurring.length===0?(
+              <div className={`${cardBorder} border rounded-xl p-8 text-center ${ts} text-sm`}>Aucun recurrent. Ajoutez votre loyer, internet...</div>
+            ):(
               <div className={`${cardBorder} border rounded-xl overflow-hidden shadow-sm`}>
                 <table className="w-full text-sm">
                   <thead className="bg-green-700 text-white">
                     <tr>
-                      <th className="text-left px-4 py-3">Catégorie</th>
+                      <th className="text-left px-4 py-3">Categorie</th>
                       <th className="text-left px-4 py-3">Description</th>
                       <th className="text-right px-4 py-3">Montant/mois</th>
                       <th className="px-4 py-3"></th>
@@ -881,7 +891,7 @@ export default function Dashboard() {
                     {recurring.map((r,i)=>(
                       <tr key={r.id} className={i%2===0?re:ro}>
                         <td className={`px-4 py-3 font-medium ${tp}`}>{r.category}</td>
-                        <td className={`px-4 py-3 ${ts}`}>{r.description||'—'}</td>
+                        <td className={`px-4 py-3 ${ts}`}>{r.description||'--'}</td>
                         <td className="px-4 py-3 text-right text-green-600">{conv(r.amount)}</td>
                         <td className="px-4 py-3 text-right">
                           <button onClick={()=>deleteRecurring(r.id)} className="text-red-400 hover:text-red-600 text-lg">×</button>
@@ -895,8 +905,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* HISTORIQUE */}
-        {tab==='historique' && (
+        {tab==='historique'&&(
           <div>
             <h2 className={`text-base font-semibold ${tp} mb-4`}>👥 Historique des partages</h2>
             <div className={`${cardBorder} border rounded-xl overflow-hidden shadow-sm`}>
@@ -913,7 +922,7 @@ export default function Dashboard() {
                   {MONTHS.map((m,i)=>{
                     const mTotal=expenses.filter(e=>e.month===i).reduce((s,e)=>s+e.amount,0)
                     if(mTotal===0) return null
-                    return (
+                    return(
                       <tr key={i} className={i%2===0?re:ro}>
                         <td className={`px-4 py-3 font-medium ${tp}`}>{MFULL[i]} {year}</td>
                         <td className={`px-4 py-3 text-right ${tp}`}>{conv(mTotal)}</td>
@@ -922,17 +931,16 @@ export default function Dashboard() {
                       </tr>
                     )
                   })}
-                  {expenses.length===0&&<tr><td colSpan="4" className={`px-4 py-8 text-center ${ts} text-sm`}>L'historique apparaîtra ici au fur et à mesure.</td></tr>}
+                  {expenses.length===0&&<tr><td colSpan="4" className={`px-4 py-8 text-center ${ts} text-sm`}>L'historique apparaitra ici.</td></tr>}
                 </tbody>
               </table>
             </div>
           </div>
         )}
 
-        {/* REGLAGES */}
-        {tab==='reglages' && (
+        {tab==='reglages'&&(
           <div className={`${cardBorder} border rounded-xl p-6 shadow-sm max-w-md`}>
-            <h2 className={`text-base font-semibold ${tp} mb-5`}>⚙️ Réglages</h2>
+            <h2 className={`text-base font-semibold ${tp} mb-5`}>⚙️ Reglages</h2>
             {[
               {label:'Nom personne 1',val:name1,set:setName1,ph:'Ex: Ousmane'},
               {label:'Nom personne 2',val:name2,set:setName2,ph:'Ex: Doucoure'},
@@ -944,7 +952,7 @@ export default function Dashboard() {
               </div>
             ))}
             <div className="mb-4">
-              <label className={`text-xs ${ts} block mb-1`}>Partage par défaut</label>
+              <label className={`text-xs ${ts} block mb-1`}>Partage par defaut</label>
               <div className="flex items-center gap-3">
                 <span className={`text-xs ${ts}`}>{n1}</span>
                 <input type="range" min="0" max="100" step="5" value={share} onChange={e=>setShare(parseInt(e.target.value))} className="flex-1"/>
@@ -955,18 +963,18 @@ export default function Dashboard() {
             <div className="mb-4">
               <label className={`text-xs ${ts} block mb-1`}>Devise de base</label>
               <select value={baseCur} onChange={e=>setBaseCur(e.target.value)} className={`w-full ${sel} border rounded-lg px-3 py-2 text-sm outline-none`}>
-                {CURS.map(c=><option key={c.code} value={c.code}>{c.flag} {c.label} ({c.sym})</option>)}
+                {CURS.map(c=><option key={c.code} value={c.code}>{c.flag} {c.label} ({c.code})</option>)}
               </select>
             </div>
             <div className="mb-5">
-              <label className={`text-xs ${ts} block mb-1`}>Thème</label>
+              <label className={`text-xs ${ts} block mb-1`}>Theme</label>
               <button onClick={()=>setDark(!dark)}
                 className={`w-full ${dark?'bg-gray-700 text-yellow-300':'bg-gray-100 text-gray-700'} border ${dark?'border-gray-600':'border-gray-200'} rounded-lg px-3 py-2 text-sm font-medium`}>
                 {dark?'☀️ Passer en mode clair':'🌙 Passer en mode sombre'}
               </button>
             </div>
             <button onClick={saveSettings} className="w-full bg-green-700 text-white rounded-lg py-2 text-sm font-medium hover:bg-green-800">
-              💾 Sauvegarder les réglages
+              💾 Sauvegarder les reglages
             </button>
             {saveMsg&&<p className="text-xs text-green-500 mt-2 text-center">{saveMsg}</p>}
           </div>
