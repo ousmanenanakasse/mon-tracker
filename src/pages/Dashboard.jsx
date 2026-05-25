@@ -258,10 +258,18 @@ export default function Dashboard() {
 
     if (type==='monthly') {
       doc.text('Rapport - '+MONTHS[month]+' '+year, 14, 22)
+      const now2 = new Date()
+      const dateStr = now2.toLocaleDateString('en-GB').replace(/\//g,'-')
+      const timeStr = now2.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
+      doc.text('Genere le: '+dateStr+' a '+timeStr, 14, 72)
       doc.setTextColor(0,0,0); doc.setFontSize(10)
       doc.text('Total: '+fmtPDF(total), 14, 40)
       doc.text(n1+' ('+share+'%): '+fmtPDF(s1), 14, 48)
       doc.text(n2+' ('+(100-share)+'%): '+fmtPDF(s2), 14, 56)
+      const now3 = new Date()
+      const dateStr2 = now3.toLocaleDateString('en-GB').replace(/\//g,'-')
+      const timeStr2 = now3.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
+      doc.text('Genere le: '+dateStr2+' a '+timeStr2, 14, 64)
       doc.text('Nb depenses: '+expenses.length, 14, 64)
       if (balance1>0) doc.text('Solde '+n1+': '+fmtPDF(balance1)+' | Restant: '+fmtPDF(balance1-s1), 14, 72)
       if (balance2>0) doc.text('Solde '+n2+': '+fmtPDF(balance2)+' | Restant: '+fmtPDF(balance2-s2), 14, 80)
