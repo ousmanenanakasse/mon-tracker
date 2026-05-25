@@ -4,14 +4,14 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
-const MONTHS = ['Jan','Fév','Mars','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc']
-const MFULL = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre']
+const MONTHS = ['Jan','Fev','Mars','Avr','Mai','Juin','Juil','Aout','Sept','Oct','Nov','Dec']
+const MFULL = ['Janvier','Fevrier','Mars','Avril','Mai','Juin','Juillet','Aout','Septembre','Octobre','Novembre','Decembre']
 const CATS = ['Loyer mensuel','Aidat','Eau et Gaz','Internet','Electricite','Nourriture','Transport','Sante','Shopping','Loisirs','Autre']
 const CURS = [
-  {code:'EUR',sym:'€',flag:'🇪🇺',label:'Euro'},
-  {code:'USD',sym:'$',flag:'🇺🇸',label:'Dollar'},
+  {code:'EUR',sym:'EUR',flag:'🇪🇺',label:'Euro'},
+  {code:'USD',sym:'USD',flag:'🇺🇸',label:'Dollar'},
   {code:'TRY',sym:'TRY',flag:'🇹🇷',label:'Livre turque'},
-  {code:'XOF',sym:'Fr',flag:'🌍',label:'Franc CFA'},
+  {code:'XOF',sym:'XOF',flag:'🌍',label:'Franc CFA'},
 ]
 const COLORS = ['#1a6b3c','#2196f3','#ff9800','#9c27b0','#e53935','#00bcd4','#8bc34a','#ff5722','#795548','#607d8b','#f06292']
 
@@ -50,6 +50,13 @@ export default function Dashboard() {
   const [filterMinAmt, setFilterMinAmt] = useState('')
   const [filterMaxAmt, setFilterMaxAmt] = useState('')
   const [showFilters, setShowFilters] = useState(false)
+  // Balance states
+  const [balance1, setBalance1] = useState(0)
+  const [balance2, setBalance2] = useState(0)
+  const [balance1Input, setBalance1Input] = useState('')
+  const [balance2Input, setBalance2Input] = useState('')
+  const [balanceSaved, setBalanceSaved] = useState(false)
+  const [lowWarning, setLowWarning] = useState(20)
 
   useEffect(() => {
     if (dark) { document.documentElement.classList.add('dark'); localStorage.setItem('theme','dark') }
@@ -65,9 +72,10 @@ export default function Dashboard() {
 
   useEffect(() => { loadExpenses() }, [month, year])
   useEffect(() => { loadYearExpenses() }, [reportYear])
+  useEffect(() => { loadBalances() }, [month, year])
 
   async function loadAll() {
-    loadExpenses(); loadYearExpenses()
+    loadExpenses(); loadYearExpenses(); loadBalances()
     const { data: b } = await supabase.from('budgets').select('*')
     if (b) setBudgets(b)
     const { data: r } = await supabase.from('recurring').select('*')
@@ -93,6 +101,35 @@ export default function Dashboard() {
     if (data) setAllYearExpenses(data)
   }
 
+  async function loadBalances() {
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data } = await supabase.from('balances').select('*')
+      .eq('user_id', user.id).eq('month', month).eq('year', year)
+    if (data) {
+      const b1 = data.find(b=>b.person==='person1')
+      const b2 = data.find(b=>b.person==='person2')
+      if (b1) { setBalance1(b1.amount); setBalance1Input(b1.amount.toString()) }
+      else { setBalance1(0); setBalance1Input('') }
+      if (b2) { setBalance2(b2.amount); setBalance2Input(b2.amount.toString()) }
+      else { setBalance2(0); setBalance2Input('') }
+    }
+  }
+
+  async function saveBalances() {
+    const { data: { user } } = await supabase.auth.getUser()
+    const amt1 = parseFloat(balance1Input)||0
+    const amt2 = parseFloat(balance2Input)||0
+    await supabase.from('balances').upsert({
+      user_id:user.id, person:'person1', amount:amt1, month, year
+    }, {onConflict:'user_id,person,month,year'})
+    await supabase.from('balances').upsert({
+      user_id:user.id, person:'person2', amount:amt2, month, year
+    }, {onConflict:'user_id,person,month,year'})
+    setBalance1(amt1); setBalance2(amt2)
+    setBalanceSaved(true)
+    setTimeout(()=>setBalanceSaved(false), 2000)
+  }
+
   async function fetchRates() {
     try {
       const r = await fetch('https://open.er-api.com/v6/latest/EUR')
@@ -106,7 +143,7 @@ export default function Dashboard() {
     await supabase.from('settings').upsert({
       user_id: user.id, name1, name2, share, base_cur: baseCur
     }, { onConflict: 'user_id' })
-    setSaveMsg('✅ Sauvegarde!')
+    setSaveMsg('Sauvegarde!')
     setTimeout(() => setSaveMsg(''), 2000)
   }
 
@@ -125,6 +162,14 @@ export default function Dashboard() {
     return parseFloat(convRaw(amount,from).toFixed(2))
   }
 
+  function fmtPDF(amt, from) {
+    const val = convRaw(amt, from||baseCur)
+    const fixed = Math.abs(val).toFixed(2)
+    const parts = fixed.split('.')
+    const intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+    return dispCur+' '+intPart+'.'+parts[1]
+  }
+
   async function addExpense() {
     const amt = parseFloat(newAmt)
     if (!newCat||isNaN(amt)||amt<=0) return
@@ -138,7 +183,7 @@ export default function Dashboard() {
   }
 
   async function deleteExpense(id) {
-    if (!confirm('Supprimer cette depense ?')) return
+    if (!confirm('Supprimer?')) return
     await supabase.from('expenses').delete().eq('id', id)
     loadExpenses()
   }
@@ -205,116 +250,58 @@ export default function Dashboard() {
     setFilterMinAmt(''); setFilterMaxAmt(''); setSortField('date'); setSortDir('desc')
   }
 
-  // PDF export - uses currency CODE not symbol to avoid encoding issues
   function exportPDF(type) {
     const doc = new jsPDF()
-    const pdfCur = dispCur
-    const fmtAmt = (amt,from) => pdfCur+' '+convRaw(amt,from).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})
-
-    doc.setFillColor(26,107,60)
-    doc.rect(0,0,220,30,'F')
-    doc.setTextColor(255,255,255)
-    doc.setFontSize(18)
-    doc.text('BudgetMate',14,12)
-    doc.setFontSize(11)
+    doc.setFillColor(26,107,60); doc.rect(0,0,220,30,'F')
+    doc.setTextColor(255,255,255); doc.setFontSize(18)
+    doc.text('BudgetMate', 14, 12); doc.setFontSize(11)
 
     if (type==='monthly') {
-      doc.text('Rapport mensuel - '+MFULL[month]+' '+year,14,22)
-      doc.setTextColor(0,0,0)
-      doc.setFontSize(10)
-      doc.text('Total: '+fmtAmt(total),14,40)
-      doc.text(n1+' ('+share+'%): '+fmtAmt(s1),14,48)
-      doc.text(n2+' ('+(100-share)+'%): '+fmtAmt(s2),14,56)
-      doc.text('Nombre de depenses: '+expenses.length,14,64)
+      doc.text('Rapport - '+MONTHS[month]+' '+year, 14, 22)
+      doc.setTextColor(0,0,0); doc.setFontSize(10)
+      doc.text('Total: '+fmtPDF(total), 14, 40)
+      doc.text(n1+' ('+share+'%): '+fmtPDF(s1), 14, 48)
+      doc.text(n2+' ('+(100-share)+'%): '+fmtPDF(s2), 14, 56)
+      doc.text('Nb depenses: '+expenses.length, 14, 64)
+      if (balance1>0) doc.text('Solde '+n1+': '+fmtPDF(balance1)+' | Restant: '+fmtPDF(balance1-s1), 14, 72)
+      if (balance2>0) doc.text('Solde '+n2+': '+fmtPDF(balance2)+' | Restant: '+fmtPDF(balance2-s2), 14, 80)
 
       const rows = []
-      const expByCat = expenses.reduce((acc,e)=>{
-        if(!acc[e.category])acc[e.category]=[]
-        acc[e.category].push(e)
-        return acc
-      },{})
+      const expByCat = expenses.reduce((acc,e)=>{if(!acc[e.category])acc[e.category]=[];acc[e.category].push(e);return acc},{})
       Object.entries(expByCat).forEach(([cat,catRows])=>{
-        catRows.forEach(e=>rows.push([
-          cat,
-          e.description||cat,
-          fmtAmt(e.amount,e.currency),
-          fmtAmt(e.amount*share/100,e.currency),
-          fmtAmt(e.amount*(100-share)/100,e.currency)
-        ]))
+        catRows.forEach(e=>rows.push([cat,e.description||cat,fmtPDF(e.amount,e.currency),fmtPDF(e.amount*share/100,e.currency),fmtPDF(e.amount*(100-share)/100,e.currency)]))
         const ct=catRows.reduce((s,e)=>s+e.amount,0)
-        rows.push(['','Sous-total '+cat,fmtAmt(ct),fmtAmt(ct*share/100),fmtAmt(ct*(100-share)/100)])
+        rows.push(['','Sous-total '+cat,fmtPDF(ct),fmtPDF(ct*share/100),fmtPDF(ct*(100-share)/100)])
       })
-
       autoTable(doc,{
-        startY:72,
-        head:[['Categorie','Description','Montant',n1,n2]],
+        startY:balance1>0||balance2>0?88:72,
+        head:[['Cat.','Description','Montant',n1,n2]],
         body:rows,
         headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},
         alternateRowStyles:{fillColor:[245,250,245]},
-        styles:{fontSize:9},
-        didParseCell:(data)=>{
-          if(data.row.raw[1]?.startsWith('Sous-total')){
-            data.cell.styles.fillColor=[212,237,218]
-            data.cell.styles.fontStyle='bold'
-          }
-        }
+        styles:{fontSize:9,font:'helvetica'},
+        didParseCell:(data)=>{if(data.row.raw[1]?.startsWith('Sous-total')){data.cell.styles.fillColor=[212,237,218];data.cell.styles.fontStyle='bold'}}
       })
-
       const fy=doc.lastAutoTable.finalY+8
-      doc.setFillColor(26,107,60)
-      doc.setTextColor(255,255,255)
-      doc.setFontSize(10)
+      doc.setFillColor(26,107,60); doc.setTextColor(255,255,255); doc.setFontSize(10)
       doc.roundedRect(14,fy,182,10,2,2,'F')
-      doc.text('TOTAL: '+fmtAmt(total),16,fy+7)
-      doc.text(n1+': '+fmtAmt(s1),80,fy+7)
-      doc.text(n2+': '+fmtAmt(s2),140,fy+7)
-      doc.save('BudgetMate_'+MFULL[month]+'_'+year+'.pdf')
-
+      doc.text('TOTAL: '+fmtPDF(total),16,fy+7)
+      doc.text(n1+': '+fmtPDF(s1),80,fy+7)
+      doc.text(n2+': '+fmtPDF(s2),140,fy+7)
+      doc.save('BudgetMate_'+MONTHS[month]+'_'+year+'.pdf')
     } else {
-      doc.text('Rapport annuel - '+reportYear,14,22)
-      doc.setTextColor(0,0,0)
-      doc.setFontSize(10)
-      doc.text('Total '+reportYear+': '+fmtAmt(yearTotal),14,40)
-      doc.text(n1+' ('+share+'%): '+fmtAmt(yearS1),14,48)
-      doc.text(n2+' ('+(100-share)+'%): '+fmtAmt(yearS2),14,56)
-
-      const monthRows=MONTHS.map((_,i)=>{
-        const mt=allYearExpenses.filter(e=>e.month===i).reduce((s,e)=>s+(e.amount||0),0)
-        return[MFULL[i],mt>0?fmtAmt(mt):'--',mt>0?fmtAmt(mt*share/100):'--',mt>0?fmtAmt(mt*(100-share)/100):'--']
-      })
-
-      autoTable(doc,{
-        startY:64,
-        head:[['Mois','Total',n1,n2]],
-        body:monthRows,
-        headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},
-        alternateRowStyles:{fillColor:[245,250,245]},
-        styles:{fontSize:9}
-      })
-
+      doc.text('Rapport Annuel - '+reportYear, 14, 22)
+      doc.setTextColor(0,0,0); doc.setFontSize(10)
+      doc.text('Total '+reportYear+': '+fmtPDF(yearTotal), 14, 40)
+      doc.text(n1+' ('+share+'%): '+fmtPDF(yearS1), 14, 48)
+      doc.text(n2+' ('+(100-share)+'%): '+fmtPDF(yearS2), 14, 56)
+      const monthRows=MONTHS.map((_,i)=>{const mt=allYearExpenses.filter(e=>e.month===i).reduce((s,e)=>s+(e.amount||0),0);return[MONTHS[i],mt>0?fmtPDF(mt):'--',mt>0?fmtPDF(mt*share/100):'--',mt>0?fmtPDF(mt*(100-share)/100):'--']})
+      autoTable(doc,{startY:64,head:[['Mois','Total',n1,n2]],body:monthRows,headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},alternateRowStyles:{fillColor:[245,250,245]},styles:{fontSize:9,font:'helvetica'}})
       doc.addPage()
-      doc.setFontSize(13)
-      doc.setTextColor(26,107,60)
-      doc.text('Total par categorie - '+reportYear,14,20)
-      doc.setTextColor(0,0,0)
-
-      const catRows=yearCatData.map(d=>[
-        d.name,
-        fmtAmt(yearByCat[d.name]),
-        fmtAmt(yearByCat[d.name]*share/100),
-        fmtAmt(yearByCat[d.name]*(100-share)/100),
-        yearTotal>0?(yearByCat[d.name]/yearTotal*100).toFixed(1)+'%':'--'
-      ])
-
-      autoTable(doc,{
-        startY:28,
-        head:[['Categorie','Total',n1,n2,'% du total']],
-        body:catRows,
-        headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},
-        alternateRowStyles:{fillColor:[245,250,245]},
-        styles:{fontSize:9}
-      })
-
+      doc.setFontSize(13); doc.setTextColor(26,107,60)
+      doc.text('Total par categorie - '+reportYear, 14, 20); doc.setTextColor(0,0,0)
+      const catRows=yearCatData.map(d=>[d.name,fmtPDF(yearByCat[d.name]),fmtPDF(yearByCat[d.name]*share/100),fmtPDF(yearByCat[d.name]*(100-share)/100),yearTotal>0?(yearByCat[d.name]/yearTotal*100).toFixed(1)+'%':'--'])
+      autoTable(doc,{startY:28,head:[['Categorie','Total',n1,n2,'%']],body:catRows,headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},alternateRowStyles:{fillColor:[245,250,245]},styles:{fontSize:9,font:'helvetica'}})
       doc.save('BudgetMate_Annuel_'+reportYear+'.pdf')
     }
   }
@@ -338,7 +325,6 @@ export default function Dashboard() {
     return 0
   })
 
-  const byCat = processed.reduce((acc,e)=>{if(!acc[e.category])acc[e.category]=[];acc[e.category].push(e);return acc},{})
   const total = expenses.reduce((s,e)=>s+(e.amount||0),0)
   const s1 = total*share/100
   const s2 = total*(100-share)/100
@@ -352,14 +338,18 @@ export default function Dashboard() {
   const yearTotal = allYearExpenses.reduce((s,e)=>s+(e.amount||0),0)
   const yearS1 = yearTotal*share/100
   const yearS2 = yearTotal*(100-share)/100
-  const monthlyData = MONTHS.map((m,i)=>{
-    const mExp=allYearExpenses.filter(e=>e.month===i)
-    const mTotal=mExp.reduce((s,e)=>s+(e.amount||0),0)
-    return{name:m,total:convNum(mTotal),[n1]:convNum(mTotal*share/100),[n2]:convNum(mTotal*(100-share)/100)}
-  })
+  const monthlyData = MONTHS.map((m,i)=>{const mExp=allYearExpenses.filter(e=>e.month===i);const mTotal=mExp.reduce((s,e)=>s+(e.amount||0),0);return{name:m,total:convNum(mTotal),[n1]:convNum(mTotal*share/100),[n2]:convNum(mTotal*(100-share)/100)}})
   const yearByCat = allYearExpenses.reduce((acc,e)=>{if(!acc[e.category])acc[e.category]=0;acc[e.category]+=e.amount||0;return acc},{})
   const yearCatData = Object.entries(yearByCat).map(([cat,amt])=>({name:cat,value:convNum(amt)})).sort((a,b)=>b.value-a.value)
   const hasActiveFilters = search||filterCat!=='all'||filterRecurring!=='all'||filterMinAmt||filterMaxAmt
+
+  // Balance calculations
+  const remaining1 = balance1 - s1
+  const remaining2 = balance2 - s2
+  const pct1 = balance1>0 ? Math.min((s1/balance1)*100, 100) : 0
+  const pct2 = balance2>0 ? Math.min((s2/balance2)*100, 100) : 0
+  const isLow1 = balance1>0 && (remaining1/balance1)*100 < lowWarning
+  const isLow2 = balance2>0 && (remaining2/balance2)*100 < lowWarning
 
   // Dark mode
   const card = dark?'bg-gray-800 border-gray-700':'bg-white border-gray-100'
@@ -370,8 +360,6 @@ export default function Dashboard() {
   const ts = dark?'text-gray-400':'text-gray-500'
   const re = dark?'bg-gray-800':'bg-white'
   const ro = dark?'bg-gray-900':'bg-gray-50'
-  const sr = dark?'bg-gray-700 text-green-400':'bg-green-50 text-green-800'
-  const str = dark?'bg-gray-700 text-green-400':'bg-green-100 text-green-800'
   const ta = 'bg-green-700 text-white'
   const ti = dark?'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700':'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
   const tts = {background:dark?'#1f2937':'#fff',border:'none',borderRadius:'8px',color:dark?'#f9fafb':'#111'}
@@ -400,6 +388,48 @@ export default function Dashboard() {
       </nav>
 
       <div className="max-w-5xl mx-auto p-4">
+
+        {/* BALANCE CARDS */}
+        {(balance1>0||balance2>0) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            {[
+              {name:n1,balance:balance1,spent:s1,remaining:remaining1,pct:pct1,isLow:isLow1},
+              {name:n2,balance:balance2,spent:s2,remaining:remaining2,pct:pct2,isLow:isLow2},
+            ].map((p,i)=>(
+              p.balance>0 && (
+                <div key={i} className={`${cardBorder} border rounded-xl p-4 shadow-sm ${p.isLow?'border-red-400':''}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className={`text-sm font-semibold ${tp}`}>{p.name}</div>
+                    {p.isLow && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">⚠️ Solde bas!</span>}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    <div>
+                      <div className={`text-xs ${ts} mb-0.5`}>Solde</div>
+                      <div className={`text-sm font-semibold ${tp}`}>{conv(p.balance)}</div>
+                    </div>
+                    <div>
+                      <div className={`text-xs ${ts} mb-0.5`}>Depense</div>
+                      <div className="text-sm font-semibold text-red-500">-{conv(p.spent)}</div>
+                    </div>
+                    <div>
+                      <div className={`text-xs ${ts} mb-0.5`}>Restant</div>
+                      <div className={`text-sm font-semibold ${p.remaining<0?'text-red-500':p.isLow?'text-orange-500':'text-green-600'}`}>
+                        {p.remaining>=0?'+':''}{conv(p.remaining)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={`h-2 ${dark?'bg-gray-700':'bg-gray-100'} rounded-full overflow-hidden`}>
+                    <div className={`h-full rounded-full transition-all ${p.pct>=100?'bg-red-500':p.pct>=80?'bg-orange-400':p.isLow?'bg-yellow-400':'bg-green-500'}`}
+                      style={{width:`${p.pct}%`}}></div>
+                  </div>
+                  <div className={`text-xs mt-1 ${ts}`}>{Math.round(p.pct)}% du solde depense</div>
+                </div>
+              )
+            ))}
+          </div>
+        )}
+
+        {/* SUMMARY */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           {[
             {label:'Total '+MONTHS[month],val:conv(total),color:tp},
@@ -414,9 +444,11 @@ export default function Dashboard() {
           ))}
         </div>
 
+        {/* TABS */}
         <div className="flex gap-2 mb-4 flex-wrap">
           {[
             {id:'depenses',label:'📋 Depenses'},
+            {id:'solde',label:'💰 Solde'},
             {id:'graphiques',label:'📊 Graphiques'},
             {id:'rapport',label:'📅 Rapport Annuel'},
             {id:'budget',label:'🎯 Budget'},
@@ -431,6 +463,126 @@ export default function Dashboard() {
           ))}
         </div>
 
+        {/* SOLDE TAB */}
+        {tab==='solde' && (
+          <div className="space-y-4">
+            <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
+              <h2 className={`text-base font-semibold ${tp} mb-1`}>💰 Solde du compte</h2>
+              <p className={`text-xs ${ts} mb-5`}>Entrez le solde actuel de chaque personne pour {MONTHS[month]} {year}.</p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-5">
+                {[
+                  {name:n1,val:balance1Input,set:setBalance1Input,spent:s1,bal:balance1},
+                  {name:n2,val:balance2Input,set:setBalance2Input,spent:s2,bal:balance2},
+                ].map((p,i)=>(
+                  <div key={i} className={`${dark?'bg-gray-700':'bg-gray-50'} rounded-xl p-4`}>
+                    <label className={`text-sm font-medium ${tp} block mb-2`}>{p.name}</label>
+                    <div className={`flex rounded-lg border ${dark?'border-gray-600':'border-gray-200'} overflow-hidden mb-3`}>
+                      <span className={`${dark?'bg-gray-600 text-gray-300':'bg-gray-100 text-gray-500'} px-3 flex items-center text-sm`}>{dispCur}</span>
+                      <input type="number" placeholder="Entrez votre solde..." value={p.val}
+                        onChange={e=>p.set(e.target.value)}
+                        className={`flex-1 ${dark?'bg-gray-700 text-white':'bg-white'} px-3 py-2 text-sm outline-none`}/>
+                    </div>
+                    {p.bal>0 && (
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-xs">
+                          <span className={ts}>Solde actuel</span>
+                          <span className={`font-medium ${tp}`}>{conv(p.bal)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className={ts}>Part des depenses</span>
+                          <span className="font-medium text-red-500">-{conv(p.spent)}</span>
+                        </div>
+                        <div className={`h-px ${dark?'bg-gray-600':'bg-gray-200'}`}></div>
+                        <div className="flex justify-between text-xs">
+                          <span className={ts}>Restant</span>
+                          <span className={`font-semibold ${p.bal-p.spent<0?'text-red-500':'text-green-600'}`}>
+                            {p.bal-p.spent>=0?'+':''}{conv(p.bal-p.spent)}
+                          </span>
+                        </div>
+                        <div className={`h-2 ${dark?'bg-gray-600':'bg-gray-200'} rounded-full overflow-hidden mt-1`}>
+                          <div className={`h-full rounded-full ${(p.spent/p.bal)>=1?'bg-red-500':(p.spent/p.bal)>=0.8?'bg-orange-400':'bg-green-500'}`}
+                            style={{width:`${Math.min((p.spent/p.bal)*100,100)}%`}}></div>
+                        </div>
+                        <div className={`text-xs ${ts}`}>{Math.round(Math.min((p.spent/p.bal)*100,100))}% du solde utilise</div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Warning threshold */}
+              <div className={`${dark?'bg-gray-700':'bg-yellow-50'} rounded-lg p-3 mb-4`}>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm">⚠️</span>
+                  <span className={`text-xs ${tp}`}>Alerte quand il reste moins de</span>
+                  <input type="number" value={lowWarning} onChange={e=>setLowWarning(parseInt(e.target.value)||20)}
+                    className={`w-16 ${inp} border rounded px-2 py-1 text-sm outline-none text-center`}/>
+                  <span className={`text-xs ${tp}`}>% du solde</span>
+                </div>
+              </div>
+
+              <button onClick={saveBalances}
+                className="w-full bg-green-700 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-green-800">
+                💾 Sauvegarder les soldes
+              </button>
+              {balanceSaved && <p className="text-xs text-green-500 mt-2 text-center">✅ Soldes sauvegardes!</p>}
+            </div>
+
+            {/* Combined view */}
+            {(balance1>0||balance2>0) && (
+              <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
+                <h2 className={`text-base font-semibold ${tp} mb-4`}>📊 Vue d'ensemble</h2>
+                <div className="space-y-4">
+                  {[
+                    {name:n1,balance:balance1,spent:s1,remaining:remaining1,pct:pct1,isLow:isLow1,color:'#1a6b3c'},
+                    {name:n2,balance:balance2,spent:s2,remaining:remaining2,pct:pct2,isLow:isLow2,color:'#2196f3'},
+                  ].filter(p=>p.balance>0).map((p,i)=>(
+                    <div key={i}>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className={`text-sm font-medium ${tp}`}>{p.name}</span>
+                        <div className="flex items-center gap-3">
+                          {p.isLow && <span className="text-xs text-red-500 font-medium">⚠️ Solde bas!</span>}
+                          <span className={`text-xs ${ts}`}>{conv(p.spent)} / {conv(p.balance)}</span>
+                          <span className={`text-xs font-semibold ${p.remaining<0?'text-red-500':p.isLow?'text-orange-500':'text-green-600'}`}>
+                            Restant: {conv(p.remaining)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className={`h-3 ${dark?'bg-gray-700':'bg-gray-100'} rounded-full overflow-hidden`}>
+                        <div className={`h-full rounded-full transition-all ${p.pct>=100?'bg-red-500':p.pct>=80?'bg-orange-400':p.isLow?'bg-yellow-400':'bg-green-500'}`}
+                          style={{width:`${p.pct}%`}}></div>
+                      </div>
+                      <div className={`text-xs mt-1 ${ts}`}>{Math.round(p.pct)}% utilise</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Totals */}
+                <div className={`mt-4 pt-4 border-t ${dark?'border-gray-700':'border-gray-200'}`}>
+                  <div className="grid grid-cols-3 gap-4 text-center">
+                    <div>
+                      <div className={`text-xs ${ts} mb-1`}>Total soldes</div>
+                      <div className={`text-sm font-semibold ${tp}`}>{conv((balance1||0)+(balance2||0))}</div>
+                    </div>
+                    <div>
+                      <div className={`text-xs ${ts} mb-1`}>Total depenses</div>
+                      <div className="text-sm font-semibold text-red-500">{conv(total)}</div>
+                    </div>
+                    <div>
+                      <div className={`text-xs ${ts} mb-1`}>Total restant</div>
+                      <div className={`text-sm font-semibold ${remaining1+remaining2<0?'text-red-500':'text-green-600'}`}>
+                        {conv((balance1||0)+(balance2||0)-total)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* DEPENSES */}
         {tab==='depenses' && (
           <div>
             <div className="flex gap-2 mb-3 flex-wrap items-center">
@@ -447,7 +599,7 @@ export default function Dashboard() {
                 className={`border px-4 py-2 rounded-lg text-sm font-medium ${showFilters?'bg-green-700 text-white border-green-700':`${cardBorder} ${ts}`}`}>
                 🔽 Filtres {hasActiveFilters&&<span className="ml-1 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">!</span>}
               </button>
-              {hasActiveFilters&&<button onClick={resetFilters} className="text-xs text-red-500 hover:text-red-700 underline">Reinitialiser</button>}
+              {hasActiveFilters&&<button onClick={resetFilters} className="text-xs text-red-500 hover:text-red-700 underline">Reset</button>}
               <div className={`flex items-center gap-2 ${cardBorder} border rounded-lg px-3 py-2`}>
                 <span className={`text-xs ${ts}`}>{n1}</span>
                 <input type="range" min="0" max="100" step="5" value={share} onChange={e=>setShare(parseInt(e.target.value))} className="w-20"/>
@@ -466,33 +618,26 @@ export default function Dashboard() {
             {showFilters&&(
               <div className={`${cardBorder} border rounded-xl p-4 mb-3 shadow-sm`}>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div>
-                    <label className={`text-xs ${ts} block mb-1`}>Categorie</label>
+                  <div><label className={`text-xs ${ts} block mb-1`}>Categorie</label>
                     <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className={`w-full ${sel} border rounded-lg px-2 py-1.5 text-sm`}>
                       <option value="all">Toutes</option>
                       {uniqueCats.map(c=><option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
-                  <div>
-                    <label className={`text-xs ${ts} block mb-1`}>Type</label>
+                  <div><label className={`text-xs ${ts} block mb-1`}>Type</label>
                     <select value={filterRecurring} onChange={e=>setFilterRecurring(e.target.value)} className={`w-full ${sel} border rounded-lg px-2 py-1.5 text-sm`}>
                       <option value="all">Tous</option>
-                      <option value="recurring">Recurrents seulement</option>
+                      <option value="recurring">Recurrents</option>
                       <option value="normal">Non-recurrents</option>
                     </select>
                   </div>
-                  <div>
-                    <label className={`text-xs ${ts} block mb-1`}>Montant min</label>
-                    <input type="number" placeholder="0" value={filterMinAmt} onChange={e=>setFilterMinAmt(e.target.value)}
-                      className={`w-full ${inp} border rounded-lg px-2 py-1.5 text-sm outline-none`}/>
+                  <div><label className={`text-xs ${ts} block mb-1`}>Montant min</label>
+                    <input type="number" placeholder="0" value={filterMinAmt} onChange={e=>setFilterMinAmt(e.target.value)} className={`w-full ${inp} border rounded-lg px-2 py-1.5 text-sm outline-none`}/>
                   </div>
-                  <div>
-                    <label className={`text-xs ${ts} block mb-1`}>Montant max</label>
-                    <input type="number" placeholder="Max" value={filterMaxAmt} onChange={e=>setFilterMaxAmt(e.target.value)}
-                      className={`w-full ${inp} border rounded-lg px-2 py-1.5 text-sm outline-none`}/>
+                  <div><label className={`text-xs ${ts} block mb-1`}>Montant max</label>
+                    <input type="number" placeholder="Max" value={filterMaxAmt} onChange={e=>setFilterMaxAmt(e.target.value)} className={`w-full ${inp} border rounded-lg px-2 py-1.5 text-sm outline-none`}/>
                   </div>
-                  <div>
-                    <label className={`text-xs ${ts} block mb-1`}>Trier par</label>
+                  <div><label className={`text-xs ${ts} block mb-1`}>Trier par</label>
                     <select value={sortField} onChange={e=>setSortField(e.target.value)} className={`w-full ${sel} border rounded-lg px-2 py-1.5 text-sm`}>
                       <option value="date">Date</option>
                       <option value="amount">Montant</option>
@@ -500,20 +645,13 @@ export default function Dashboard() {
                       <option value="category">Categorie</option>
                     </select>
                   </div>
-                  <div>
-                    <label className={`text-xs ${ts} block mb-1`}>Ordre</label>
+                  <div><label className={`text-xs ${ts} block mb-1`}>Ordre</label>
                     <select value={sortDir} onChange={e=>setSortDir(e.target.value)} className={`w-full ${sel} border rounded-lg px-2 py-1.5 text-sm`}>
                       <option value="desc">Decroissant</option>
                       <option value="asc">Croissant</option>
                     </select>
                   </div>
                 </div>
-              </div>
-            )}
-
-            {hasActiveFilters&&(
-              <div className={`mb-2 text-xs ${ts}`}>
-                {processed.length} resultat{processed.length!==1?'s':''}{search&&<> pour "<span className="font-medium text-green-600">{search}</span>"</>}
               </div>
             )}
 
@@ -546,7 +684,7 @@ export default function Dashboard() {
             <div className={`${cardBorder} border rounded-xl overflow-hidden shadow-sm`}>
               {processed.length===0?(
                 <div className={`p-8 text-center ${ts} text-sm`}>
-                  {hasActiveFilters?'Aucun resultat pour ces filtres.':search?`Aucun resultat pour "${search}"`:`Aucune depense pour ${MFULL[month]} ${year}. Cliquez "+ Ajouter" !`}
+                  {hasActiveFilters?'Aucun resultat.':search?`Aucun resultat pour "${search}"`:`Aucune depense pour ${MONTHS[month]} ${year}.`}
                 </div>
               ):(
                 <div className="overflow-x-auto">
@@ -604,7 +742,7 @@ export default function Dashboard() {
                         </tr>
                       ))}
                       <tr className="bg-green-700 text-white font-semibold">
-                        <td className="px-4 py-3" colSpan="2">TOTAL ({processed.length} dep.)</td>
+                        <td className="px-4 py-3" colSpan="2">TOTAL ({processed.length})</td>
                         <td className="px-4 py-3 text-right">{conv(processed.reduce((s,e)=>s+e.amount,0))}</td>
                         <td className="px-4 py-3 text-right">{conv(processed.reduce((s,e)=>s+e.amount,0)*share/100)}</td>
                         <td className="px-4 py-3 text-right">{conv(processed.reduce((s,e)=>s+e.amount,0)*(100-share)/100)}</td>
@@ -621,12 +759,12 @@ export default function Dashboard() {
         {tab==='graphiques'&&(
           <div className="space-y-6">
             {expenses.length===0?(
-              <div className={`${cardBorder} border rounded-xl p-8 text-center ${ts} text-sm`}>Ajoutez des depenses pour voir les graphiques !</div>
+              <div className={`${cardBorder} border rounded-xl p-8 text-center ${ts} text-sm`}>Ajoutez des depenses pour voir les graphiques!</div>
             ):(
               <>
                 <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
                   <h2 className={`text-base font-semibold ${tp} mb-1`}>🥧 Repartition par categorie</h2>
-                  <p className={`text-xs ${ts} mb-4`}>{MFULL[month]} {year}</p>
+                  <p className={`text-xs ${ts} mb-4`}>{MONTHS[month]} {year}</p>
                   <div className="flex flex-col md:flex-row items-center gap-6">
                     <ResponsiveContainer width="100%" height={280}>
                       <PieChart>
@@ -650,7 +788,6 @@ export default function Dashboard() {
                 </div>
                 <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
                   <h2 className={`text-base font-semibold ${tp} mb-1`}>📊 Depenses par categorie</h2>
-                  <p className={`text-xs ${ts} mb-4`}>{MFULL[month]} {year}</p>
                   <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={pieData} margin={{top:5,right:20,left:10,bottom:60}}>
                       <CartesianGrid strokeDasharray="3 3" stroke={dark?'#374151':'#f0f0f0'}/>
@@ -685,7 +822,7 @@ export default function Dashboard() {
         {tab==='rapport'&&(
           <div className="space-y-6">
             <div className="flex items-center gap-3 flex-wrap">
-              <label className={`text-sm font-medium ${tp}`}>Annee :</label>
+              <label className={`text-sm font-medium ${tp}`}>Annee:</label>
               <select value={reportYear} onChange={e=>setReportYear(parseInt(e.target.value))} className={`${sel} border rounded-lg px-3 py-2 text-sm`}>
                 {years.map(y=><option key={y} value={y}>{y}</option>)}
               </select>
@@ -869,13 +1006,13 @@ export default function Dashboard() {
           <div>
             <div className="flex justify-between items-center mb-4">
               <h2 className={`text-base font-semibold ${tp}`}>↺ Depenses recurrentes</h2>
-              <button onClick={addRecurring} className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-800">+ Ajouter recurrent</button>
+              <button onClick={addRecurring} className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-800">+ Ajouter</button>
             </div>
             <div className="bg-blue-900 bg-opacity-20 rounded-lg p-3 mb-4 text-xs text-blue-400">
-              Ces depenses se repetent chaque mois. Cliquez "Recurrents" pour les charger automatiquement.
+              Ces depenses se repetent chaque mois.
             </div>
             {recurring.length===0?(
-              <div className={`${cardBorder} border rounded-xl p-8 text-center ${ts} text-sm`}>Aucun recurrent. Ajoutez votre loyer, internet...</div>
+              <div className={`${cardBorder} border rounded-xl p-8 text-center ${ts} text-sm`}>Aucun recurrent.</div>
             ):(
               <div className={`${cardBorder} border rounded-xl overflow-hidden shadow-sm`}>
                 <table className="w-full text-sm">
@@ -970,11 +1107,11 @@ export default function Dashboard() {
               <label className={`text-xs ${ts} block mb-1`}>Theme</label>
               <button onClick={()=>setDark(!dark)}
                 className={`w-full ${dark?'bg-gray-700 text-yellow-300':'bg-gray-100 text-gray-700'} border ${dark?'border-gray-600':'border-gray-200'} rounded-lg px-3 py-2 text-sm font-medium`}>
-                {dark?'☀️ Passer en mode clair':'🌙 Passer en mode sombre'}
+                {dark?'☀️ Mode clair':'🌙 Mode sombre'}
               </button>
             </div>
             <button onClick={saveSettings} className="w-full bg-green-700 text-white rounded-lg py-2 text-sm font-medium hover:bg-green-800">
-              💾 Sauvegarder les reglages
+              💾 Sauvegarder
             </button>
             {saveMsg&&<p className="text-xs text-green-500 mt-2 text-center">{saveMsg}</p>}
           </div>
