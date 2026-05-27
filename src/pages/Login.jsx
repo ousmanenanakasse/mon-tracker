@@ -6,6 +6,7 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [mode, setMode] = useState('login')
   const [msg, setMsg] = useState('')
+  const [msgType, setMsgType] = useState('error')
   const [loading, setLoading] = useState(false)
 
   async function handleSubmit() {
@@ -13,11 +14,17 @@ export default function Login() {
     setMsg('')
     if (mode === 'login') {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) setMsg(error.message)
-    } else {
+      if (error) { setMsg(error.message); setMsgType('error') }
+    } else if (mode === 'signup') {
       const { error } = await supabase.auth.signUp({ email, password })
-      if (error) setMsg(error.message)
-      else setMsg('✅ Vérifiez votre email pour confirmer!')
+      if (error) { setMsg(error.message); setMsgType('error') }
+      else { setMsg('Verifiez votre email pour confirmer votre compte!'); setMsgType('success') }
+    } else if (mode === 'reset') {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin + '/reset-password'
+      })
+      if (error) { setMsg(error.message); setMsgType('error') }
+      else { setMsg('Email envoye! Verifiez votre boite mail pour reinitialiser votre mot de passe.'); setMsgType('success') }
     }
     setLoading(false)
   }
@@ -28,46 +35,68 @@ export default function Login() {
         <div className="text-center mb-8">
           <div className="text-4xl mb-2">🤝</div>
           <h1 className="text-2xl font-semibold text-gray-800">BudgetMate</h1>
-          <p className="text-gray-500 text-sm mt-1">Gérez vos dépenses mensuelles</p>
+          <p className="text-gray-500 text-sm mt-1">Gerez vos depenses mensuelles</p>
         </div>
-        <div className="flex gap-2 mb-6">
-          <button
-            onClick={() => setMode('login')}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${
-              mode === 'login' ? 'bg-green-700 text-white' : 'bg-gray-100 text-gray-600'
-            }`}>
-            Se connecter
-          </button>
-          <button
-            onClick={() => setMode('signup')}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${
-              mode === 'signup' ? 'bg-green-700 text-white' : 'bg-gray-100 text-gray-600'
-            }`}>
-            Créer un compte
-          </button>
-        </div>
-        <input
-          type="email"
-          placeholder="Email"
+
+        {mode !== 'reset' && (
+          <div className="flex gap-2 mb-6">
+            <button onClick={() => { setMode('login'); setMsg('') }}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${mode==='login'?'bg-green-700 text-white':'bg-gray-100 text-gray-600'}`}>
+              Se connecter
+            </button>
+            <button onClick={() => { setMode('signup'); setMsg('') }}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${mode==='signup'?'bg-green-700 text-white':'bg-gray-100 text-gray-600'}`}>
+              Creer un compte
+            </button>
+          </div>
+        )}
+
+        {mode === 'reset' && (
+          <div className="mb-6">
+            <h2 className="text-base font-semibold text-gray-800 mb-1">Mot de passe oublie</h2>
+            <p className="text-sm text-gray-500">Entrez votre email et nous vous enverrons un lien pour reinitialiser votre mot de passe.</p>
+          </div>
+        )}
+
+        <input type="email" placeholder="Email"
           className="w-full border border-gray-200 rounded-xl p-3 mb-3 text-sm outline-none focus:border-green-500"
-          value={email}
-          onChange={e => setEmail(e.target.value)}
-        />
-        <input
-          type="password"
-          placeholder="Mot de passe"
-          className="w-full border border-gray-200 rounded-xl p-3 mb-4 text-sm outline-none focus:border-green-500"
-          value={password}
-          onChange={e => setPassword(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleSubmit()}
-        />
-        <button
-          onClick={handleSubmit}
-          disabled={loading}
+          value={email} onChange={e => setEmail(e.target.value)}/>
+
+        {mode !== 'reset' && (
+          <input type="password" placeholder="Mot de passe"
+            className="w-full border border-gray-200 rounded-xl p-3 mb-2 text-sm outline-none focus:border-green-500"
+            value={password} onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleSubmit()}/>
+        )}
+
+        {mode === 'login' && (
+          <div className="text-right mb-4">
+            <button onClick={() => { setMode('reset'); setMsg('') }}
+              className="text-xs text-green-700 hover:text-green-800 hover:underline">
+              Mot de passe oublie ?
+            </button>
+          </div>
+        )}
+
+        {mode !== 'login' && <div className="mb-4"></div>}
+
+        <button onClick={handleSubmit} disabled={loading}
           className="w-full bg-green-700 hover:bg-green-800 text-white rounded-xl p-3 text-sm font-medium transition disabled:opacity-50">
-          {loading ? 'Chargement...' : mode === 'login' ? 'Se connecter' : 'Créer un compte'}
+          {loading ? 'Chargement...' : mode==='login' ? 'Se connecter' : mode==='signup' ? 'Creer un compte' : 'Envoyer le lien'}
         </button>
-        {msg && <p className="mt-4 text-sm text-center text-red-500">{msg}</p>}
+
+        {mode === 'reset' && (
+          <button onClick={() => { setMode('login'); setMsg('') }}
+            className="w-full mt-3 text-sm text-gray-500 hover:text-gray-700">
+            ← Retour a la connexion
+          </button>
+        )}
+
+        {msg && (
+          <p className={`mt-4 text-sm text-center ${msgType==='success'?'text-green-600':'text-red-500'}`}>
+            {msg}
+          </p>
+        )}
       </div>
     </div>
   )
