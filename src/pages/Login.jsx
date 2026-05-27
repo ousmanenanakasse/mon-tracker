@@ -21,7 +21,7 @@ export default function Login() {
       else { setMsg('Verifiez votre email pour confirmer votre compte!'); setMsgType('success') }
     } else if (mode === 'reset') {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin + '/reset-password'
+        redirectTo: 'https://budgetmate-app.vercel.app/reset-password'
       })
       if (error) { setMsg(error.message); setMsgType('error') }
       else { setMsg('Email envoye! Verifiez votre boite mail pour reinitialiser votre mot de passe.'); setMsgType('success') }
