@@ -50,13 +50,18 @@ export default function Dashboard() {
   const [filterMinAmt, setFilterMinAmt] = useState('')
   const [filterMaxAmt, setFilterMaxAmt] = useState('')
   const [showFilters, setShowFilters] = useState(false)
-  // Balance states
   const [balance1, setBalance1] = useState(0)
   const [balance2, setBalance2] = useState(0)
   const [balance1Input, setBalance1Input] = useState('')
   const [balance2Input, setBalance2Input] = useState('')
   const [balanceSaved, setBalanceSaved] = useState(false)
   const [lowWarning, setLowWarning] = useState(20)
+  // Change password states
+  const [newPwd, setNewPwd] = useState('')
+  const [confirmPwd, setConfirmPwd] = useState('')
+  const [pwdMsg, setPwdMsg] = useState('')
+  const [pwdMsgType, setPwdMsgType] = useState('error')
+  const [pwdLoading, setPwdLoading] = useState(false)
 
   useEffect(() => {
     if (dark) { document.documentElement.classList.add('dark'); localStorage.setItem('theme','dark') }
@@ -145,6 +150,21 @@ export default function Dashboard() {
     }, { onConflict: 'user_id' })
     setSaveMsg('Sauvegarde!')
     setTimeout(() => setSaveMsg(''), 2000)
+  }
+
+  async function changePassword() {
+    if (!newPwd) { setPwdMsg('Entrez un mot de passe!'); setPwdMsgType('error'); return }
+    if (newPwd.length < 6) { setPwdMsg('Minimum 6 caracteres!'); setPwdMsgType('error'); return }
+    if (newPwd !== confirmPwd) { setPwdMsg('Les mots de passe ne correspondent pas!'); setPwdMsgType('error'); return }
+    setPwdLoading(true)
+    const { error } = await supabase.auth.updateUser({ password: newPwd })
+    if (error) { setPwdMsg('Erreur: '+error.message); setPwdMsgType('error') }
+    else {
+      setPwdMsg('Mot de passe mis a jour avec succes!'); setPwdMsgType('success')
+      setNewPwd(''); setConfirmPwd('')
+      setTimeout(() => setPwdMsg(''), 3000)
+    }
+    setPwdLoading(false)
   }
 
   function conv(amount, from) {
@@ -258,21 +278,17 @@ export default function Dashboard() {
 
     if (type==='monthly') {
       doc.text('Rapport - '+MONTHS[month]+' '+year, 14, 22)
-      const now2 = new Date()
-      const dateStr = now2.toLocaleDateString('en-GB').replace(/\//g,'-')
-      const timeStr = now2.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
-      doc.text('                                 '+dateStr+' à '+timeStr, 14, 72)
       doc.setTextColor(0,0,0); doc.setFontSize(10)
       doc.text('Total: '+fmtPDF(total), 14, 40)
       doc.text(n1+' ('+share+'%): '+fmtPDF(s1), 14, 48)
       doc.text(n2+' ('+(100-share)+'%): '+fmtPDF(s2), 14, 56)
-      const now3 = new Date()
-      const dateStr2 = now3.toLocaleDateString('en-GB').replace(/\//g,'-')
-      const timeStr2 = now3.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
-      doc.text('                                 '+dateStr2+' à '+timeStr2, 14, 64)
       doc.text('Nb depenses: '+expenses.length, 14, 64)
-      if (balance1>0) doc.text('Solde '+n1+': '+fmtPDF(balance1)+' | Restant: '+fmtPDF(balance1-s1), 14, 72)
-      if (balance2>0) doc.text('Solde '+n2+': '+fmtPDF(balance2)+' | Restant: '+fmtPDF(balance2-s2), 14, 80)
+      const now2 = new Date()
+      const dateStr = now2.toLocaleDateString('en-GB').replace(/\//g,'-')
+      const timeStr = now2.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
+      doc.text('Genere le: '+dateStr+' a '+timeStr, 14, 72)
+      if (balance1>0) doc.text('Solde '+n1+': '+fmtPDF(balance1)+' | Restant: '+fmtPDF(balance1-s1), 14, 80)
+      if (balance2>0) doc.text('Solde '+n2+': '+fmtPDF(balance2)+' | Restant: '+fmtPDF(balance2-s2), 14, 88)
 
       const rows = []
       const expByCat = expenses.reduce((acc,e)=>{if(!acc[e.category])acc[e.category]=[];acc[e.category].push(e);return acc},{})
@@ -282,7 +298,7 @@ export default function Dashboard() {
         rows.push(['','Sous-total '+cat,fmtPDF(ct),fmtPDF(ct*share/100),fmtPDF(ct*(100-share)/100)])
       })
       autoTable(doc,{
-        startY:balance1>0||balance2>0?88:72,
+        startY:balance1>0||balance2>0?96:80,
         head:[['Cat.','Description','Montant',n1,n2]],
         body:rows,
         headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},
@@ -303,8 +319,12 @@ export default function Dashboard() {
       doc.text('Total '+reportYear+': '+fmtPDF(yearTotal), 14, 40)
       doc.text(n1+' ('+share+'%): '+fmtPDF(yearS1), 14, 48)
       doc.text(n2+' ('+(100-share)+'%): '+fmtPDF(yearS2), 14, 56)
+      const now3 = new Date()
+      const dateStr2 = now3.toLocaleDateString('en-GB').replace(/\//g,'-')
+      const timeStr2 = now3.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
+      doc.text('Genere le: '+dateStr2+' a '+timeStr2, 14, 64)
       const monthRows=MONTHS.map((_,i)=>{const mt=allYearExpenses.filter(e=>e.month===i).reduce((s,e)=>s+(e.amount||0),0);return[MONTHS[i],mt>0?fmtPDF(mt):'--',mt>0?fmtPDF(mt*share/100):'--',mt>0?fmtPDF(mt*(100-share)/100):'--']})
-      autoTable(doc,{startY:64,head:[['Mois','Total',n1,n2]],body:monthRows,headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},alternateRowStyles:{fillColor:[245,250,245]},styles:{fontSize:9,font:'helvetica'}})
+      autoTable(doc,{startY:72,head:[['Mois','Total',n1,n2]],body:monthRows,headStyles:{fillColor:[26,107,60],textColor:255,fontStyle:'bold'},alternateRowStyles:{fillColor:[245,250,245]},styles:{fontSize:9,font:'helvetica'}})
       doc.addPage()
       doc.setFontSize(13); doc.setTextColor(26,107,60)
       doc.text('Total par categorie - '+reportYear, 14, 20); doc.setTextColor(0,0,0)
@@ -314,7 +334,6 @@ export default function Dashboard() {
     }
   }
 
-  // Filter + Sort
   let processed = [...expenses]
   if (search.trim()) processed = processed.filter(e=>e.category.toLowerCase().includes(search.toLowerCase())||(e.description||'').toLowerCase().includes(search.toLowerCase()))
   if (filterCat!=='all') processed = processed.filter(e=>e.category===filterCat)
@@ -350,16 +369,13 @@ export default function Dashboard() {
   const yearByCat = allYearExpenses.reduce((acc,e)=>{if(!acc[e.category])acc[e.category]=0;acc[e.category]+=e.amount||0;return acc},{})
   const yearCatData = Object.entries(yearByCat).map(([cat,amt])=>({name:cat,value:convNum(amt)})).sort((a,b)=>b.value-a.value)
   const hasActiveFilters = search||filterCat!=='all'||filterRecurring!=='all'||filterMinAmt||filterMaxAmt
+  const remaining1 = balance1-s1
+  const remaining2 = balance2-s2
+  const pct1 = balance1>0?Math.min((s1/balance1)*100,100):0
+  const pct2 = balance2>0?Math.min((s2/balance2)*100,100):0
+  const isLow1 = balance1>0&&(remaining1/balance1)*100<lowWarning
+  const isLow2 = balance2>0&&(remaining2/balance2)*100<lowWarning
 
-  // Balance calculations
-  const remaining1 = balance1 - s1
-  const remaining2 = balance2 - s2
-  const pct1 = balance1>0 ? Math.min((s1/balance1)*100, 100) : 0
-  const pct2 = balance2>0 ? Math.min((s2/balance2)*100, 100) : 0
-  const isLow1 = balance1>0 && (remaining1/balance1)*100 < lowWarning
-  const isLow2 = balance2>0 && (remaining2/balance2)*100 < lowWarning
-
-  // Dark mode
   const card = dark?'bg-gray-800 border-gray-700':'bg-white border-gray-100'
   const cardBorder = dark?'bg-gray-800 border-gray-700':'bg-white border-gray-200'
   const inp = dark?'bg-gray-700 border-gray-600 text-white placeholder-gray-400':'bg-white border-gray-200 text-gray-900'
@@ -397,38 +413,25 @@ export default function Dashboard() {
 
       <div className="max-w-5xl mx-auto p-4">
 
-        {/* BALANCE CARDS */}
         {(balance1>0||balance2>0) && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
             {[
               {name:n1,balance:balance1,spent:s1,remaining:remaining1,pct:pct1,isLow:isLow1},
               {name:n2,balance:balance2,spent:s2,remaining:remaining2,pct:pct2,isLow:isLow2},
             ].map((p,i)=>(
-              p.balance>0 && (
+              p.balance>0&&(
                 <div key={i} className={`${cardBorder} border rounded-xl p-4 shadow-sm ${p.isLow?'border-red-400':''}`}>
                   <div className="flex items-center justify-between mb-2">
                     <div className={`text-sm font-semibold ${tp}`}>{p.name}</div>
-                    {p.isLow && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">⚠️ Solde bas!</span>}
+                    {p.isLow&&<span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">Solde bas!</span>}
                   </div>
                   <div className="grid grid-cols-3 gap-2 mb-3">
-                    <div>
-                      <div className={`text-xs ${ts} mb-0.5`}>Solde</div>
-                      <div className={`text-sm font-semibold ${tp}`}>{conv(p.balance)}</div>
-                    </div>
-                    <div>
-                      <div className={`text-xs ${ts} mb-0.5`}>Depense</div>
-                      <div className="text-sm font-semibold text-red-500">-{conv(p.spent)}</div>
-                    </div>
-                    <div>
-                      <div className={`text-xs ${ts} mb-0.5`}>Restant</div>
-                      <div className={`text-sm font-semibold ${p.remaining<0?'text-red-500':p.isLow?'text-orange-500':'text-green-600'}`}>
-                        {p.remaining>=0?'+':''}{conv(p.remaining)}
-                      </div>
-                    </div>
+                    <div><div className={`text-xs ${ts} mb-0.5`}>Solde</div><div className={`text-sm font-semibold ${tp}`}>{conv(p.balance)}</div></div>
+                    <div><div className={`text-xs ${ts} mb-0.5`}>Depense</div><div className="text-sm font-semibold text-red-500">-{conv(p.spent)}</div></div>
+                    <div><div className={`text-xs ${ts} mb-0.5`}>Restant</div><div className={`text-sm font-semibold ${p.remaining<0?'text-red-500':p.isLow?'text-orange-500':'text-green-600'}`}>{p.remaining>=0?'+':''}{conv(p.remaining)}</div></div>
                   </div>
                   <div className={`h-2 ${dark?'bg-gray-700':'bg-gray-100'} rounded-full overflow-hidden`}>
-                    <div className={`h-full rounded-full transition-all ${p.pct>=100?'bg-red-500':p.pct>=80?'bg-orange-400':p.isLow?'bg-yellow-400':'bg-green-500'}`}
-                      style={{width:`${p.pct}%`}}></div>
+                    <div className={`h-full rounded-full transition-all ${p.pct>=100?'bg-red-500':p.pct>=80?'bg-orange-400':p.isLow?'bg-yellow-400':'bg-green-500'}`} style={{width:`${p.pct}%`}}></div>
                   </div>
                   <div className={`text-xs mt-1 ${ts}`}>{Math.round(p.pct)}% du solde depense</div>
                 </div>
@@ -437,7 +440,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* SUMMARY */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           {[
             {label:'Total '+MONTHS[month],val:conv(total),color:tp},
@@ -452,7 +454,6 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* TABS */}
         <div className="flex gap-2 mb-4 flex-wrap">
           {[
             {id:'depenses',label:'📋 Depenses'},
@@ -471,13 +472,11 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* SOLDE TAB */}
-        {tab==='solde' && (
+        {tab==='solde'&&(
           <div className="space-y-4">
             <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
               <h2 className={`text-base font-semibold ${tp} mb-1`}>💰 Solde du compte</h2>
-              <p className={`text-xs ${ts} mb-5`}>Entrez le solde actuel de chaque personne pour {MONTHS[month]} {year}.</p>
-
+              <p className={`text-xs ${ts} mb-5`}>Entrez le solde actuel pour {MONTHS[month]} {year}.</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-5">
                 {[
                   {name:n1,val:balance1Input,set:setBalance1Input,spent:s1,bal:balance1},
@@ -487,39 +486,24 @@ export default function Dashboard() {
                     <label className={`text-sm font-medium ${tp} block mb-2`}>{p.name}</label>
                     <div className={`flex rounded-lg border ${dark?'border-gray-600':'border-gray-200'} overflow-hidden mb-3`}>
                       <span className={`${dark?'bg-gray-600 text-gray-300':'bg-gray-100 text-gray-500'} px-3 flex items-center text-sm`}>{dispCur}</span>
-                      <input type="number" placeholder="Entrez votre solde..." value={p.val}
-                        onChange={e=>p.set(e.target.value)}
+                      <input type="number" placeholder="Entrez votre solde..." value={p.val} onChange={e=>p.set(e.target.value)}
                         className={`flex-1 ${dark?'bg-gray-700 text-white':'bg-white'} px-3 py-2 text-sm outline-none`}/>
                     </div>
-                    {p.bal>0 && (
+                    {p.bal>0&&(
                       <div className="space-y-2">
-                        <div className="flex justify-between text-xs">
-                          <span className={ts}>Solde actuel</span>
-                          <span className={`font-medium ${tp}`}>{conv(p.bal)}</span>
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className={ts}>Part des depenses</span>
-                          <span className="font-medium text-red-500">-{conv(p.spent)}</span>
-                        </div>
+                        <div className="flex justify-between text-xs"><span className={ts}>Solde actuel</span><span className={`font-medium ${tp}`}>{conv(p.bal)}</span></div>
+                        <div className="flex justify-between text-xs"><span className={ts}>Part des depenses</span><span className="font-medium text-red-500">-{conv(p.spent)}</span></div>
                         <div className={`h-px ${dark?'bg-gray-600':'bg-gray-200'}`}></div>
-                        <div className="flex justify-between text-xs">
-                          <span className={ts}>Restant</span>
-                          <span className={`font-semibold ${p.bal-p.spent<0?'text-red-500':'text-green-600'}`}>
-                            {p.bal-p.spent>=0?'+':''}{conv(p.bal-p.spent)}
-                          </span>
-                        </div>
+                        <div className="flex justify-between text-xs"><span className={ts}>Restant</span><span className={`font-semibold ${p.bal-p.spent<0?'text-red-500':'text-green-600'}`}>{p.bal-p.spent>=0?'+':''}{conv(p.bal-p.spent)}</span></div>
                         <div className={`h-2 ${dark?'bg-gray-600':'bg-gray-200'} rounded-full overflow-hidden mt-1`}>
-                          <div className={`h-full rounded-full ${(p.spent/p.bal)>=1?'bg-red-500':(p.spent/p.bal)>=0.8?'bg-orange-400':'bg-green-500'}`}
-                            style={{width:`${Math.min((p.spent/p.bal)*100,100)}%`}}></div>
+                          <div className={`h-full rounded-full ${(p.spent/p.bal)>=1?'bg-red-500':(p.spent/p.bal)>=0.8?'bg-orange-400':'bg-green-500'}`} style={{width:`${Math.min((p.spent/p.bal)*100,100)}%`}}></div>
                         </div>
-                        <div className={`text-xs ${ts}`}>{Math.round(Math.min((p.spent/p.bal)*100,100))}% du solde utilise</div>
+                        <div className={`text-xs ${ts}`}>{Math.round(Math.min((p.spent/p.bal)*100,100))}% utilise</div>
                       </div>
                     )}
                   </div>
                 ))}
               </div>
-
-              {/* Warning threshold */}
               <div className={`${dark?'bg-gray-700':'bg-yellow-50'} rounded-lg p-3 mb-4`}>
                 <div className="flex items-center gap-3">
                   <span className="text-sm">⚠️</span>
@@ -529,60 +513,41 @@ export default function Dashboard() {
                   <span className={`text-xs ${tp}`}>% du solde</span>
                 </div>
               </div>
-
-              <button onClick={saveBalances}
-                className="w-full bg-green-700 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-green-800">
+              <button onClick={saveBalances} className="w-full bg-green-700 text-white rounded-lg py-2.5 text-sm font-medium hover:bg-green-800">
                 💾 Sauvegarder les soldes
               </button>
-              {balanceSaved && <p className="text-xs text-green-500 mt-2 text-center">✅ Soldes sauvegardes!</p>}
+              {balanceSaved&&<p className="text-xs text-green-500 mt-2 text-center">Soldes sauvegardes!</p>}
             </div>
 
-            {/* Combined view */}
-            {(balance1>0||balance2>0) && (
+            {(balance1>0||balance2>0)&&(
               <div className={`${cardBorder} border rounded-xl p-6 shadow-sm`}>
                 <h2 className={`text-base font-semibold ${tp} mb-4`}>📊 Vue d'ensemble</h2>
                 <div className="space-y-4">
                   {[
-                    {name:n1,balance:balance1,spent:s1,remaining:remaining1,pct:pct1,isLow:isLow1,color:'#1a6b3c'},
-                    {name:n2,balance:balance2,spent:s2,remaining:remaining2,pct:pct2,isLow:isLow2,color:'#2196f3'},
+                    {name:n1,balance:balance1,spent:s1,remaining:remaining1,pct:pct1,isLow:isLow1},
+                    {name:n2,balance:balance2,spent:s2,remaining:remaining2,pct:pct2,isLow:isLow2},
                   ].filter(p=>p.balance>0).map((p,i)=>(
                     <div key={i}>
                       <div className="flex justify-between items-center mb-1">
                         <span className={`text-sm font-medium ${tp}`}>{p.name}</span>
                         <div className="flex items-center gap-3">
-                          {p.isLow && <span className="text-xs text-red-500 font-medium">⚠️ Solde bas!</span>}
+                          {p.isLow&&<span className="text-xs text-red-500 font-medium">Solde bas!</span>}
                           <span className={`text-xs ${ts}`}>{conv(p.spent)} / {conv(p.balance)}</span>
-                          <span className={`text-xs font-semibold ${p.remaining<0?'text-red-500':p.isLow?'text-orange-500':'text-green-600'}`}>
-                            Restant: {conv(p.remaining)}
-                          </span>
+                          <span className={`text-xs font-semibold ${p.remaining<0?'text-red-500':p.isLow?'text-orange-500':'text-green-600'}`}>Restant: {conv(p.remaining)}</span>
                         </div>
                       </div>
                       <div className={`h-3 ${dark?'bg-gray-700':'bg-gray-100'} rounded-full overflow-hidden`}>
-                        <div className={`h-full rounded-full transition-all ${p.pct>=100?'bg-red-500':p.pct>=80?'bg-orange-400':p.isLow?'bg-yellow-400':'bg-green-500'}`}
-                          style={{width:`${p.pct}%`}}></div>
+                        <div className={`h-full rounded-full transition-all ${p.pct>=100?'bg-red-500':p.pct>=80?'bg-orange-400':p.isLow?'bg-yellow-400':'bg-green-500'}`} style={{width:`${p.pct}%`}}></div>
                       </div>
                       <div className={`text-xs mt-1 ${ts}`}>{Math.round(p.pct)}% utilise</div>
                     </div>
                   ))}
                 </div>
-
-                {/* Totals */}
                 <div className={`mt-4 pt-4 border-t ${dark?'border-gray-700':'border-gray-200'}`}>
                   <div className="grid grid-cols-3 gap-4 text-center">
-                    <div>
-                      <div className={`text-xs ${ts} mb-1`}>Total soldes</div>
-                      <div className={`text-sm font-semibold ${tp}`}>{conv((balance1||0)+(balance2||0))}</div>
-                    </div>
-                    <div>
-                      <div className={`text-xs ${ts} mb-1`}>Total depenses</div>
-                      <div className="text-sm font-semibold text-red-500">{conv(total)}</div>
-                    </div>
-                    <div>
-                      <div className={`text-xs ${ts} mb-1`}>Total restant</div>
-                      <div className={`text-sm font-semibold ${remaining1+remaining2<0?'text-red-500':'text-green-600'}`}>
-                        {conv((balance1||0)+(balance2||0)-total)}
-                      </div>
-                    </div>
+                    <div><div className={`text-xs ${ts} mb-1`}>Total soldes</div><div className={`text-sm font-semibold ${tp}`}>{conv((balance1||0)+(balance2||0))}</div></div>
+                    <div><div className={`text-xs ${ts} mb-1`}>Total depenses</div><div className="text-sm font-semibold text-red-500">{conv(total)}</div></div>
+                    <div><div className={`text-xs ${ts} mb-1`}>Total restant</div><div className={`text-sm font-semibold ${remaining1+remaining2<0?'text-red-500':'text-green-600'}`}>{conv((balance1||0)+(balance2||0)-total)}</div></div>
                   </div>
                 </div>
               </div>
@@ -590,8 +555,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* DEPENSES */}
-        {tab==='depenses' && (
+        {tab==='depenses'&&(
           <div>
             <div className="flex gap-2 mb-3 flex-wrap items-center">
               <select value={month} onChange={e=>setMonth(parseInt(e.target.value))} className={`${sel} border rounded-lg px-3 py-2 text-sm`}>
@@ -1111,6 +1075,24 @@ export default function Dashboard() {
                 {CURS.map(c=><option key={c.code} value={c.code}>{c.flag} {c.label} ({c.code})</option>)}
               </select>
             </div>
+
+            {/* CHANGE PASSWORD */}
+            <div className={`mb-4 pt-4 border-t ${dark?'border-gray-700':'border-gray-200'}`}>
+              <label className={`text-xs ${ts} block mb-3 font-medium`}>🔐 Changer le mot de passe</label>
+              <input type="password" placeholder="Nouveau mot de passe" value={newPwd}
+                onChange={e=>setNewPwd(e.target.value)}
+                className={`w-full ${inp} border rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500 mb-2`}/>
+              <input type="password" placeholder="Confirmer le mot de passe" value={confirmPwd}
+                onChange={e=>setConfirmPwd(e.target.value)}
+                onKeyDown={e=>e.key==='Enter'&&changePassword()}
+                className={`w-full ${inp} border rounded-lg px-3 py-2 text-sm outline-none focus:border-green-500 mb-2`}/>
+              <button onClick={changePassword} disabled={pwdLoading}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50">
+                {pwdLoading?'Mise a jour...':'🔐 Mettre a jour le mot de passe'}
+              </button>
+              {pwdMsg&&<p className={`text-xs mt-2 text-center ${pwdMsgType==='success'?'text-green-500':'text-red-500'}`}>{pwdMsg}</p>}
+            </div>
+
             <div className="mb-5">
               <label className={`text-xs ${ts} block mb-1`}>Theme</label>
               <button onClick={()=>setDark(!dark)}
